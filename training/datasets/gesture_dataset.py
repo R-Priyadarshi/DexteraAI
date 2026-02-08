@@ -24,7 +24,7 @@ from core.landmarks.normalizer import LandmarkNormalizer, NormalizationMode
 from core.types import Handedness, HandLandmarks
 
 
-class GestureSequenceDataset(Dataset):
+class GestureSequenceDataset(Dataset):  # type: ignore[type-arg]
     """PyTorch Dataset for gesture recognition training.
 
     Expected data format on disk:
@@ -194,7 +194,7 @@ class GestureSequenceDataset(Dataset):
             json.dump(metadata, f, indent=2)
 
 
-class SyntheticGestureDataset(Dataset):
+class SyntheticGestureDataset(Dataset):  # type: ignore[type-arg]
     """Synthetic dataset for testing and development.
 
     Generates random landmark sequences with known labels.

@@ -56,7 +56,7 @@ class EvalResult:
     precision_macro: float = 0.0
     recall_macro: float = 0.0
     f1_macro: float = 0.0
-    per_class_report: dict = field(default_factory=dict)
+    per_class_report: dict[str, object] = field(default_factory=dict)
     confusion_matrix: np.ndarray = field(default_factory=lambda: np.array([]))
     top_k_accuracy: dict[int, float] = field(default_factory=dict)
     avg_latency_ms: float = 0.0

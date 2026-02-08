@@ -98,20 +98,23 @@ class LandmarkNormalizer:
 
     def _center_on_wrist(self, lm: np.ndarray) -> np.ndarray:
         """Translate so wrist is at origin."""
-        return lm - lm[self.WRIST]
+        result: np.ndarray = lm - lm[self.WRIST]
+        return result
 
     def _center_on_palm(self, lm: np.ndarray) -> np.ndarray:
         """Translate so palm center is at origin."""
         palm_indices = [self.WRIST, self.INDEX_MCP, self.MIDDLE_MCP, self.RING_MCP, self.PINKY_MCP]
         palm_center = lm[palm_indices].mean(axis=0)
-        return lm - palm_center
+        result: np.ndarray = lm - palm_center
+        return result
 
     def _normalize_scale(self, lm: np.ndarray) -> np.ndarray:
         """Scale landmarks to unit bounding box."""
         max_dist = np.max(np.linalg.norm(lm - lm[self.WRIST], axis=1))
         if max_dist < 1e-6:
             return lm
-        return lm / max_dist
+        result: np.ndarray = lm / max_dist
+        return result
 
     def _align_rotation(self, lm: np.ndarray) -> np.ndarray:
         """Rotate so wrist→middle_mcp axis aligns with Y-axis (2D plane)."""
@@ -133,4 +136,5 @@ class LandmarkNormalizer:
             dtype=np.float32,
         )
 
-        return (rot @ lm.T).T
+        result: np.ndarray = (rot @ lm.T).T
+        return result

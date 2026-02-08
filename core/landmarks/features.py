@@ -138,7 +138,7 @@ class LandmarkFeatureExtractor:
             if total_length < 1e-6:
                 curls.append(0.0)
             else:
-                curl = 1.0 - (tip_to_mcp / total_length)
+                curl = float(1.0 - (tip_to_mcp / total_length))
                 curls.append(max(0.0, min(1.0, curl)))
         return np.array(curls, dtype=np.float32)
 
@@ -150,4 +150,5 @@ class LandmarkFeatureExtractor:
         norm = np.linalg.norm(normal)
         if norm < 1e-6:
             return np.zeros(3, dtype=np.float32)
-        return (normal / norm).astype(np.float32)
+        result: np.ndarray = (normal / norm).astype(np.float32)
+        return result

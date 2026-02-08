@@ -121,7 +121,8 @@ class LandmarkAugmentor:
             ],
             dtype=np.float32,
         )
-        return (rot @ lm.T).T
+        result: np.ndarray = (rot @ lm.T).T
+        return result
 
     def _random_scale(self, lm: np.ndarray) -> np.ndarray:
         scale = self._rng.uniform(*self._config.scale_range)

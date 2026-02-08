@@ -160,12 +160,15 @@ class GesturePipeline:
         t_start = time.perf_counter()
 
         # 1. Preprocess
+        assert self._preprocessor is not None
         processed = self._preprocessor.process(frame)
 
         # 2. Detect hands
+        assert self._detector is not None
         hands = self._detector.detect(processed)
 
         # 3. Normalize landmarks
+        assert self._normalizer is not None
         normalized_hands = self._normalizer.normalize_batch(hands)
 
         # 4. Buffer features and classify
@@ -193,6 +196,7 @@ class GesturePipeline:
 
     def _classify_gesture(self, hand_idx: int, hand: HandLandmarks) -> GestureResult | None:
         """Run gesture classification on buffered sequence."""
+        assert self._model is not None
         features, mask = self._buffers[hand_idx].get_padded_features()
 
         # Convert to tensor
@@ -201,11 +205,11 @@ class GesturePipeline:
 
         result = self._model.predict(x, mask=m)
 
-        class_id = result["class_id"].item()
+        class_id: int = int(result["class_id"].item())
         probs = result["class_probs"][0]
 
         # Check threshold
-        class_prob = probs[class_id].item()
+        class_prob: float = float(probs[class_id].item())
         if class_prob < self._config.confidence_threshold:
             return None
 

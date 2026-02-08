@@ -39,8 +39,11 @@ class PositionalEncoding(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Add positional encoding. x: (batch, seq_len, d_model)."""
-        x = x + self.pe[:, : x.size(1)]
-        return self.dropout(x)
+        pe = self.pe
+        assert isinstance(pe, torch.Tensor)
+        x = x + pe[:, : x.size(1)]
+        result: torch.Tensor = self.dropout(x)
+        return result
 
 
 class GestureTransformer(nn.Module):

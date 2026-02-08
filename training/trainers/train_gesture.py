@@ -21,7 +21,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from loguru import logger
-from torch.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast  # type: ignore[attr-defined]
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, LinearLR, SequentialLR
 from torch.utils.data import DataLoader, random_split
@@ -356,7 +356,7 @@ class GestureTrainer:
         self._model.load_state_dict(ckpt["model_state_dict"])
         self._optimizer.load_state_dict(ckpt["optimizer_state_dict"])
         self._scheduler.load_state_dict(ckpt["scheduler_state_dict"])
-        epoch = ckpt["epoch"]
+        epoch: int = int(ckpt["epoch"])
         logger.info(f"Loaded checkpoint: {path} (epoch {epoch})")
         return epoch
 
