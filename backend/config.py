@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import List
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -33,7 +32,7 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
     workers: int = 1
-    cors_origins: List[str] = ["*"]
+    cors_origins: list[str] = ["*"]
 
     # ── Model paths ──────────────────────────────────────────
     onnx_model_path: str = "models/gesture_classifier.onnx"
@@ -68,7 +67,7 @@ class Settings(BaseSettings):
 
     @field_validator("cors_origins", mode="before")
     @classmethod
-    def _parse_cors(cls, v):  # noqa: ANN001
+    def _parse_cors(cls, v: str | list[str]) -> list[str]:
         if isinstance(v, str):
             return json.loads(v)
         return v

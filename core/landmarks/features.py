@@ -7,9 +7,12 @@ that improve gesture classification.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 
-from core.types import HandLandmarks
+if TYPE_CHECKING:
+    from core.types import HandLandmarks
 
 
 class LandmarkFeatureExtractor:
@@ -103,10 +106,9 @@ class LandmarkFeatureExtractor:
 
     def _fingertip_wrist_distances(self, lm: np.ndarray) -> np.ndarray:
         """Distance from each fingertip to wrist."""
-        return np.array([
-            np.linalg.norm(lm[tip] - lm[self.WRIST])
-            for tip in self.FINGERTIPS
-        ], dtype=np.float32)
+        return np.array(
+            [np.linalg.norm(lm[tip] - lm[self.WRIST]) for tip in self.FINGERTIPS], dtype=np.float32
+        )
 
     def _fingertip_pairwise_distances(self, lm: np.ndarray) -> np.ndarray:
         """Pairwise distances between all fingertips (10 pairs)."""
@@ -123,7 +125,7 @@ class LandmarkFeatureExtractor:
         Computed as: 1 - (tip-to-mcp distance / pip-to-mcp + tip-to-pip distance).
         """
         fingers = [
-            (self.THUMB_TIP, 2, 3),   # thumb: tip, IP, MCP≈2
+            (self.THUMB_TIP, 2, 3),  # thumb: tip, IP, MCP≈2
             (self.INDEX_TIP, self.INDEX_PIP, self.INDEX_MCP),
             (self.MIDDLE_TIP, self.MIDDLE_PIP, self.MIDDLE_MCP),
             (self.RING_TIP, self.RING_PIP, self.RING_MCP),
@@ -132,10 +134,7 @@ class LandmarkFeatureExtractor:
         curls = []
         for tip, pip_, mcp in fingers:
             tip_to_mcp = np.linalg.norm(lm[tip] - lm[mcp])
-            total_length = (
-                np.linalg.norm(lm[mcp] - lm[pip_]) +
-                np.linalg.norm(lm[pip_] - lm[tip])
-            )
+            total_length = np.linalg.norm(lm[mcp] - lm[pip_]) + np.linalg.norm(lm[pip_] - lm[tip])
             if total_length < 1e-6:
                 curls.append(0.0)
             else:

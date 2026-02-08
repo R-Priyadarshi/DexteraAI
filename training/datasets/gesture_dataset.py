@@ -21,7 +21,7 @@ from torch.utils.data import Dataset
 from core.landmarks.augmentor import AugmentationConfig, LandmarkAugmentor
 from core.landmarks.features import LandmarkFeatureExtractor
 from core.landmarks.normalizer import LandmarkNormalizer, NormalizationMode
-from core.types import HandLandmarks, Handedness
+from core.types import Handedness, HandLandmarks
 
 
 class GestureSequenceDataset(Dataset):
@@ -74,9 +74,16 @@ class GestureSequenceDataset(Dataset):
             self._label_names: list[str] = metadata["labels"]
         else:
             self._label_names = [
-                "none", "open_palm", "closed_fist", "thumbs_up",
-                "thumbs_down", "peace", "pointing_up", "ok_sign",
-                "pinch", "wave",
+                "none",
+                "open_palm",
+                "closed_fist",
+                "thumbs_up",
+                "thumbs_down",
+                "peace",
+                "pointing_up",
+                "ok_sign",
+                "pinch",
+                "wave",
             ]
 
         # Discover sequence files
@@ -90,9 +97,7 @@ class GestureSequenceDataset(Dataset):
         self._normalizer = LandmarkNormalizer(normalization_mode)
         self._extractor = LandmarkFeatureExtractor()
         self._augmentor = (
-            LandmarkAugmentor(augment_config or AugmentationConfig())
-            if augment
-            else None
+            LandmarkAugmentor(augment_config or AugmentationConfig()) if augment else None
         )
 
     @property
@@ -124,10 +129,7 @@ class GestureSequenceDataset(Dataset):
         raw_landmarks = data["landmarks"]  # (T, 21, 3)
         label = int(data["label"])
         handedness_str = str(data.get("handedness", "right"))
-        handedness = (
-            Handedness.LEFT if handedness_str == "left"
-            else Handedness.RIGHT
-        )
+        handedness = Handedness.LEFT if handedness_str == "left" else Handedness.RIGHT
 
         # Convert each frame to HandLandmarks → normalize → (optionally) augment → extract features
         seq_len_actual = raw_landmarks.shape[0]
@@ -214,9 +216,9 @@ class SyntheticGestureDataset(Dataset):
         self._rng = np.random.default_rng(seed)
 
         # Pre-generate data for speed
-        self._features = self._rng.standard_normal(
-            (num_samples, seq_len, feature_dim)
-        ).astype(np.float32)
+        self._features = self._rng.standard_normal((num_samples, seq_len, feature_dim)).astype(
+            np.float32
+        )
         self._labels = self._rng.integers(0, num_classes, size=num_samples)
 
     @property

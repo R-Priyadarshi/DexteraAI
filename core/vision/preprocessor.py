@@ -23,6 +23,7 @@ class PreprocessConfig:
         normalize: Whether to normalize pixel values to [0, 1].
         flip_horizontal: Mirror the frame (useful for selfie mode).
     """
+
     target_width: int = 0
     target_height: int = 0
     max_dimension: int = 1280

@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 from hypothesis import given, settings
-from hypothesis.extra.numpy import arrays
 from hypothesis import strategies as st
+from hypothesis.extra.numpy import arrays
 
 from core.landmarks.augmentor import AugmentationConfig, LandmarkAugmentor
 from core.landmarks.features import LandmarkFeatureExtractor
 from core.landmarks.normalizer import LandmarkNormalizer, NormalizationMode
-from core.types import HandLandmarks, Handedness, NUM_HAND_LANDMARKS, LANDMARK_DIMS
+from core.types import LANDMARK_DIMS, NUM_HAND_LANDMARKS, HandLandmarks
 
 
 class TestLandmarkNormalizer:
@@ -82,9 +81,7 @@ class TestLandmarkAugmentor:
         )
         augmentor = LandmarkAugmentor(config, seed=42)
         result = augmentor.augment(random_landmarks)
-        np.testing.assert_allclose(
-            result.landmarks, random_landmarks.landmarks, atol=1e-6
-        )
+        np.testing.assert_allclose(result.landmarks, random_landmarks.landmarks, atol=1e-6)
 
     def test_reproducibility(self, random_landmarks: HandLandmarks) -> None:
         aug1 = LandmarkAugmentor(seed=123)

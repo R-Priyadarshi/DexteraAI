@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Protocol
 
-import numpy as np
-
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    import numpy as np
     from numpy.typing import NDArray
 
 
@@ -20,18 +20,36 @@ if TYPE_CHECKING:
 NUM_HAND_LANDMARKS = 21
 LANDMARK_DIMS = 3  # x, y, z
 HAND_CONNECTIONS: list[tuple[int, int]] = [
-    (0, 1), (1, 2), (2, 3), (3, 4),        # Thumb
-    (0, 5), (5, 6), (6, 7), (7, 8),        # Index
-    (0, 9), (9, 10), (10, 11), (11, 12),   # Middle
-    (0, 13), (13, 14), (14, 15), (15, 16), # Ring
-    (0, 17), (17, 18), (18, 19), (19, 20), # Pinky
-    (5, 9), (9, 13), (13, 17),             # Palm
+    (0, 1),
+    (1, 2),
+    (2, 3),
+    (3, 4),  # Thumb
+    (0, 5),
+    (5, 6),
+    (6, 7),
+    (7, 8),  # Index
+    (0, 9),
+    (9, 10),
+    (10, 11),
+    (11, 12),  # Middle
+    (0, 13),
+    (13, 14),
+    (14, 15),
+    (15, 16),  # Ring
+    (0, 17),
+    (17, 18),
+    (18, 19),
+    (19, 20),  # Pinky
+    (5, 9),
+    (9, 13),
+    (13, 17),  # Palm
 ]
 
 
 # ---------------------------------------------------------------------------
 # Enums
 # ---------------------------------------------------------------------------
+
 
 class Handedness(Enum):
     LEFT = "left"
@@ -41,6 +59,7 @@ class Handedness(Enum):
 
 class GestureState(Enum):
     """Lifecycle of a gesture detection."""
+
     IDLE = auto()
     DETECTING = auto()
     RECOGNIZED = auto()
@@ -52,6 +71,7 @@ class GestureState(Enum):
 # Core Data Structures
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True, slots=True)
 class HandLandmarks:
     """Normalized 3D hand landmarks for a single hand.
@@ -61,14 +81,14 @@ class HandLandmarks:
         handedness: Left or right hand.
         confidence: Detection confidence [0, 1].
     """
+
     landmarks: NDArray[np.float32]  # shape (21, 3)
     handedness: Handedness = Handedness.UNKNOWN
     confidence: float = 0.0
 
     def __post_init__(self) -> None:
         assert self.landmarks.shape == (NUM_HAND_LANDMARKS, LANDMARK_DIMS), (
-            f"Expected shape ({NUM_HAND_LANDMARKS}, {LANDMARK_DIMS}), "
-            f"got {self.landmarks.shape}"
+            f"Expected shape ({NUM_HAND_LANDMARKS}, {LANDMARK_DIMS}), got {self.landmarks.shape}"
         )
 
 
@@ -83,6 +103,7 @@ class GestureResult:
         state: Current gesture lifecycle state.
         landmarks: Source hand landmarks (optional).
     """
+
     gesture_id: int
     gesture_name: str
     confidence: float
@@ -100,6 +121,7 @@ class FrameResult:
         timestamp_ms: Frame timestamp in milliseconds.
         inference_time_ms: Total inference latency in milliseconds.
     """
+
     hands: list[HandLandmarks] = field(default_factory=list)
     gestures: list[GestureResult] = field(default_factory=list)
     timestamp_ms: float = 0.0
@@ -109,6 +131,7 @@ class FrameResult:
 # ---------------------------------------------------------------------------
 # Protocols (Interfaces)
 # ---------------------------------------------------------------------------
+
 
 class HandDetector(Protocol):
     """Protocol for hand landmark detection backends."""

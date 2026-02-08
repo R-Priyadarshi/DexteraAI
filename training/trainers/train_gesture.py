@@ -15,7 +15,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -26,8 +26,9 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, LinearLR, SequentialLR
 from torch.utils.data import DataLoader, random_split
 
-from core.temporal.model import GestureTransformer
-from training.datasets.gesture_dataset import GestureSequenceDataset
+if TYPE_CHECKING:
+    from core.temporal.model import GestureTransformer
+    from training.datasets.gesture_dataset import GestureSequenceDataset
 
 
 @dataclass
@@ -52,6 +53,7 @@ class TrainConfig:
         experiment_name: MLflow experiment name.
         log_every_n_steps: Log metrics every N training steps.
     """
+
     epochs: int = 100
     batch_size: int = 64
     learning_rate: float = 1e-3
@@ -73,6 +75,7 @@ class TrainConfig:
 @dataclass
 class TrainResult:
     """Result of a training run."""
+
     best_val_loss: float = float("inf")
     best_val_accuracy: float = 0.0
     best_epoch: int = 0
@@ -104,9 +107,7 @@ class GestureTrainer:
 
         # Device
         if device == "auto":
-            self._device = torch.device(
-                "cuda" if torch.cuda.is_available() else "cpu"
-            )
+            self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
             self._device = torch.device(device)
 
@@ -116,7 +117,8 @@ class GestureTrainer:
         val_size = int(len(dataset) * self._config.val_split)
         train_size = len(dataset) - val_size
         self._train_dataset, self._val_dataset = random_split(
-            dataset, [train_size, val_size],
+            dataset,
+            [train_size, val_size],
             generator=torch.Generator().manual_seed(self._config.seed),
         )
 
@@ -333,9 +335,7 @@ class GestureTrainer:
 
         return {"loss": avg_loss, "accuracy": accuracy}
 
-    def _save_checkpoint(
-        self, epoch: int, val_loss: float, filename: str
-    ) -> None:
+    def _save_checkpoint(self, epoch: int, val_loss: float, filename: str) -> None:
         """Save model checkpoint."""
         path = self._ckpt_dir / filename
         torch.save(
@@ -364,18 +364,19 @@ class GestureTrainer:
         """Try to initialize MLflow tracking."""
         try:
             import mlflow
+
             mlflow.set_experiment(self._config.experiment_name)
             mlflow.start_run()
-            mlflow.log_params({
-                "epochs": self._config.epochs,
-                "batch_size": self._config.batch_size,
-                "learning_rate": self._config.learning_rate,
-                "weight_decay": self._config.weight_decay,
-                "model_params": sum(
-                    p.numel() for p in self._model.parameters()
-                ),
-                "device": str(self._device),
-            })
+            mlflow.log_params(
+                {
+                    "epochs": self._config.epochs,
+                    "batch_size": self._config.batch_size,
+                    "learning_rate": self._config.learning_rate,
+                    "weight_decay": self._config.weight_decay,
+                    "model_params": sum(p.numel() for p in self._model.parameters()),
+                    "device": str(self._device),
+                }
+            )
             logger.info("MLflow tracking enabled.")
             return True
         except ImportError:
@@ -392,6 +393,7 @@ class GestureTrainer:
         """Log metrics to MLflow."""
         try:
             import mlflow
+
             mlflow.log_metrics(
                 {
                     "train_loss": train_metrics["loss"],

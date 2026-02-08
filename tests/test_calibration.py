@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from core.calibration.calibrator import UserCalibrator
-from core.types import HandLandmarks, Handedness
+from core.types import Handedness, HandLandmarks
 
 
 class TestUserCalibrator:

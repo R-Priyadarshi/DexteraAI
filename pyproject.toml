@@ -73,7 +73,12 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "ANN", "B", "SIM", "TCH"]
-ignore = ["ANN101", "ANN102"]
+ignore = ["ANN401"]
+
+[tool.ruff.lint.per-file-ignores]
+"core/temporal/*.py" = ["N812"]  # Allow `import torch.nn.functional as F` (PyTorch convention)
+"tests/*.py" = ["ANN"]          # Don't require type annotations in tests
+"backend/apps/api/routes.py" = ["B008"]  # FastAPI Depends/File in defaults is idiomatic
 
 [tool.mypy]
 python_version = "3.11"

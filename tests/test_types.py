@@ -14,8 +14,8 @@ from core.types import (
     FrameResult,
     GestureResult,
     GestureState,
-    HandLandmarks,
     Handedness,
+    HandLandmarks,
 )
 
 

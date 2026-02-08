@@ -8,11 +8,13 @@ multiple execution providers.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import numpy as np
 import onnxruntime as ort
 from loguru import logger
+
+if TYPE_CHECKING:
+    import numpy as np
 
 
 class ONNXInferenceRuntime:
@@ -122,7 +124,7 @@ class ONNXInferenceRuntime:
             raise RuntimeError("No model loaded. Call load() first.")
 
         outputs = self._session.run(self._output_names, inputs)
-        return dict(zip(self._output_names, outputs))
+        return dict(zip(self._output_names, outputs, strict=False))
 
     @property
     def input_names(self) -> list[str]:

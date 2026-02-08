@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-import tempfile
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
-import pytest
 import torch
 
 from training.datasets.gesture_dataset import (
     GestureSequenceDataset,
     SyntheticGestureDataset,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class TestSyntheticGestureDataset:
@@ -23,9 +24,7 @@ class TestSyntheticGestureDataset:
         assert len(ds) == 100
 
     def test_shapes(self) -> None:
-        ds = SyntheticGestureDataset(
-            num_samples=10, seq_len=20, num_classes=5, feature_dim=86
-        )
+        ds = SyntheticGestureDataset(num_samples=10, seq_len=20, num_classes=5, feature_dim=86)
         features, label, mask = ds[0]
         assert features.shape == (20, 86)
         assert label.shape == ()
@@ -84,6 +83,7 @@ class TestGestureSequenceDataset:
             )
 
         import json
+
         metadata = {"labels": labels, "count": n}
         with open(tmp_path / "metadata.json", "w") as f:
             json.dump(metadata, f)

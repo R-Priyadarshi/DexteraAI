@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
-import pytest
 import torch
 
 from core.temporal.model import GestureTransformer
 from core.temporal.sequence_buffer import SequenceBuffer
-from core.types import HandLandmarks, Handedness, NUM_HAND_LANDMARKS, LANDMARK_DIMS
+
+if TYPE_CHECKING:
+    from core.types import HandLandmarks
 
 
 class TestGestureTransformer:
@@ -45,8 +48,11 @@ class TestGestureTransformer:
 
     def test_model_size(self) -> None:
         model = GestureTransformer(
-            input_dim=86, num_classes=10,
-            d_model=128, nhead=4, num_layers=4,
+            input_dim=86,
+            num_classes=10,
+            d_model=128,
+            nhead=4,
+            num_layers=4,
         )
         size_mb = model.get_model_size_mb()
         # Should be well under 5MB for edge deployment

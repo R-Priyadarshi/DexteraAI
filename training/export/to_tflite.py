@@ -11,6 +11,7 @@ Handles:
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator  # noqa: TCH003 — used in nested function annotation
 from pathlib import Path
 
 import numpy as np
@@ -37,12 +38,11 @@ def export_to_tflite(
     """
     try:
         import onnx
-        from onnx_tf.backend import prepare
         import tensorflow as tf
+        from onnx_tf.backend import prepare
     except ImportError as e:
         raise ImportError(
-            "TFLite export requires: pip install onnx-tf tensorflow. "
-            f"Missing: {e}"
+            f"TFLite export requires: pip install onnx-tf tensorflow. Missing: {e}"
         ) from e
 
     onnx_path = Path(onnx_path)
@@ -59,9 +59,7 @@ def export_to_tflite(
 
     # Step 2: TensorFlow → TFLite
     logger.info("Converting TensorFlow → TFLite...")
-    converter = tf.lite.TFLiteConverter.from_saved_model(
-        str(tf_saved_model_dir)
-    )
+    converter = tf.lite.TFLiteConverter.from_saved_model(str(tf_saved_model_dir))
 
     # Quantization
     if quantize == "dynamic":
@@ -71,16 +69,10 @@ def export_to_tflite(
         converter.target_spec.supported_types = [tf.float16]
     elif quantize == "int8":
         if representative_data is None:
-            raise ValueError(
-                "int8 quantization requires representative_data"
-            )
+            raise ValueError("int8 quantization requires representative_data")
         converter.optimizations = [tf.lite.Optimize.DEFAULT]
-        converter.representative_dataset = _make_representative_dataset(
-            representative_data
-        )
-        converter.target_spec.supported_ops = [
-            tf.lite.OpsSet.TFLITE_BUILTINS_INT8
-        ]
+        converter.representative_dataset = _make_representative_dataset(representative_data)
+        converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
         converter.inference_input_type = tf.int8
         converter.inference_output_type = tf.int8
 
@@ -91,12 +83,12 @@ def export_to_tflite(
 
     file_size_mb = output_path.stat().st_size / (1024 * 1024)
     logger.info(
-        f"TFLite model exported: {output_path} "
-        f"({file_size_mb:.2f} MB, quantize={quantize})"
+        f"TFLite model exported: {output_path} ({file_size_mb:.2f} MB, quantize={quantize})"
     )
 
     # Cleanup temp dir
     import shutil
+
     if tf_saved_model_dir.exists():
         shutil.rmtree(tf_saved_model_dir)
 
@@ -105,10 +97,12 @@ def export_to_tflite(
 
 def _make_representative_dataset(
     data: np.ndarray,
-) -> callable:
+) -> Callable[[], Iterator[list[np.ndarray]]]:
     """Create a representative dataset generator for int8 calibration."""
-    def generator():
+
+    def generator() -> Iterator[list[np.ndarray]]:
         for i in range(min(len(data), 200)):
-            sample = data[i:i+1].astype(np.float32)
+            sample = data[i : i + 1].astype(np.float32)
             yield [sample]
+
     return generator

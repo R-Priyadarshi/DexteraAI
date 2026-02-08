@@ -14,6 +14,7 @@ import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -28,8 +29,9 @@ from sklearn.metrics import (
 )
 from torch.utils.data import DataLoader
 
-from core.temporal.model import GestureTransformer
-from training.datasets.gesture_dataset import GestureSequenceDataset
+if TYPE_CHECKING:
+    from core.temporal.model import GestureTransformer
+    from training.datasets.gesture_dataset import GestureSequenceDataset
 
 
 @dataclass
@@ -49,14 +51,13 @@ class EvalResult:
         p99_latency_ms: 99th percentile latency.
         total_samples: Number of evaluation samples.
     """
+
     accuracy: float = 0.0
     precision_macro: float = 0.0
     recall_macro: float = 0.0
     f1_macro: float = 0.0
     per_class_report: dict = field(default_factory=dict)
-    confusion_matrix: np.ndarray = field(
-        default_factory=lambda: np.array([])
-    )
+    confusion_matrix: np.ndarray = field(default_factory=lambda: np.array([]))
     top_k_accuracy: dict[int, float] = field(default_factory=dict)
     avg_latency_ms: float = 0.0
     p95_latency_ms: float = 0.0
@@ -82,9 +83,7 @@ class GestureEvaluator:
         batch_size: int = 64,
     ) -> None:
         if device == "auto":
-            self._device = torch.device(
-                "cuda" if torch.cuda.is_available() else "cpu"
-            )
+            self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
             self._device = torch.device(device)
 
@@ -124,9 +123,7 @@ class GestureEvaluator:
             output = self._model(features, mask=masks)
             t_end = time.perf_counter()
 
-            latency_per_sample = (
-                (t_end - t_start) * 1000.0 / features.size(0)
-            )
+            latency_per_sample = (t_end - t_start) * 1000.0 / features.size(0)
             latencies.extend([latency_per_sample] * features.size(0))
 
             probs = torch.softmax(output["logits"], dim=-1).cpu().numpy()
@@ -143,17 +140,12 @@ class GestureEvaluator:
         # Core metrics
         result = EvalResult(
             accuracy=accuracy_score(y_true, y_pred),
-            precision_macro=precision_score(
-                y_true, y_pred, average="macro", zero_division=0
-            ),
-            recall_macro=recall_score(
-                y_true, y_pred, average="macro", zero_division=0
-            ),
-            f1_macro=f1_score(
-                y_true, y_pred, average="macro", zero_division=0
-            ),
+            precision_macro=precision_score(y_true, y_pred, average="macro", zero_division=0),
+            recall_macro=recall_score(y_true, y_pred, average="macro", zero_division=0),
+            f1_macro=f1_score(y_true, y_pred, average="macro", zero_division=0),
             per_class_report=classification_report(
-                y_true, y_pred,
+                y_true,
+                y_pred,
                 target_names=self._label_names,
                 output_dict=True,
                 zero_division=0,
@@ -169,10 +161,7 @@ class GestureEvaluator:
         for k in top_k:
             if k <= y_probs.shape[1]:
                 top_k_preds = np.argsort(y_probs, axis=1)[:, -k:]
-                top_k_correct = sum(
-                    1 for i, label in enumerate(y_true)
-                    if label in top_k_preds[i]
-                )
+                top_k_correct = sum(1 for i, label in enumerate(y_true) if label in top_k_preds[i])
                 result.top_k_accuracy[k] = top_k_correct / len(y_true)
 
         return result
@@ -196,9 +185,7 @@ class GestureEvaluator:
         logger.info(f"P99 latency:        {result.p99_latency_ms:.2f} ms")
         logger.info("=" * 60)
 
-    def save_report(
-        self, result: EvalResult, path: str | Path
-    ) -> None:
+    def save_report(self, result: EvalResult, path: str | Path) -> None:
         """Save evaluation report as JSON."""
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -208,9 +195,7 @@ class GestureEvaluator:
             "precision_macro": result.precision_macro,
             "recall_macro": result.recall_macro,
             "f1_macro": result.f1_macro,
-            "top_k_accuracy": {
-                str(k): v for k, v in result.top_k_accuracy.items()
-            },
+            "top_k_accuracy": {str(k): v for k, v in result.top_k_accuracy.items()},
             "latency": {
                 "avg_ms": result.avg_latency_ms,
                 "p95_ms": result.p95_latency_ms,

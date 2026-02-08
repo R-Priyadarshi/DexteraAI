@@ -10,13 +10,16 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 from loguru import logger
 
 from core.landmarks.features import LandmarkFeatureExtractor
 from core.landmarks.normalizer import LandmarkNormalizer, NormalizationMode
-from core.types import HandLandmarks
+
+if TYPE_CHECKING:
+    from core.types import HandLandmarks
 
 
 @dataclass
@@ -29,6 +32,7 @@ class CalibrationProfile:
         created_at: ISO timestamp of creation.
         hand_scale: Estimated hand scale factor.
     """
+
     user_id: str
     gesture_references: dict[str, list[np.ndarray]] = field(default_factory=dict)
     created_at: str = ""
@@ -125,7 +129,8 @@ class UserCalibrator:
                 )
 
         import datetime
-        self._profile.created_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        self._profile.created_at = datetime.datetime.now(datetime.UTC).isoformat()
         self._is_calibrating = False
         logger.info(
             f"Calibration complete for {self._user_id}: "

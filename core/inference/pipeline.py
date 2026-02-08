@@ -12,9 +12,8 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import numpy as np
 import torch
 from loguru import logger
 
@@ -25,6 +24,9 @@ from core.temporal.sequence_buffer import SequenceBuffer
 from core.types import FrameResult, GestureResult, GestureState, HandLandmarks
 from core.vision.detector import MediaPipeHandDetector
 from core.vision.preprocessor import FramePreprocessor, PreprocessConfig
+
+if TYPE_CHECKING:
+    import numpy as np
 
 
 @dataclass
@@ -41,14 +43,25 @@ class PipelineConfig:
         normalization_mode: Landmark normalization strategy.
         preprocess_config: Frame preprocessing settings.
     """
+
     max_hands: int = 2
     sequence_length: int = 30
     confidence_threshold: float = 0.6
     model_path: str | None = None
-    gesture_labels: list[str] = field(default_factory=lambda: [
-        "none", "open_palm", "closed_fist", "thumbs_up", "thumbs_down",
-        "peace", "pointing_up", "ok_sign", "pinch", "wave",
-    ])
+    gesture_labels: list[str] = field(
+        default_factory=lambda: [
+            "none",
+            "open_palm",
+            "closed_fist",
+            "thumbs_up",
+            "thumbs_down",
+            "peace",
+            "pointing_up",
+            "ok_sign",
+            "pinch",
+            "wave",
+        ]
+    )
     use_gpu: bool = False
     normalization_mode: NormalizationMode = NormalizationMode.FULL
     preprocess_config: PreprocessConfig = field(default_factory=PreprocessConfig)
@@ -80,7 +93,9 @@ class GesturePipeline:
         self._feature_extractor: LandmarkFeatureExtractor | None = None
         self._buffers: dict[int, SequenceBuffer] = {}  # per-hand buffers
         self._model: GestureTransformer | None = None
-        self._device = torch.device("cuda" if self._config.use_gpu and torch.cuda.is_available() else "cpu")
+        self._device = torch.device(
+            "cuda" if self._config.use_gpu and torch.cuda.is_available() else "cpu"
+        )
         self._is_running = False
 
     @property
@@ -155,7 +170,7 @@ class GesturePipeline:
 
         # 4. Buffer features and classify
         gestures: list[GestureResult] = []
-        for i, hand in enumerate(normalized_hands[:self._config.max_hands]):
+        for i, hand in enumerate(normalized_hands[: self._config.max_hands]):
             self._buffers[i].push(hand)
 
             if self._model and self._buffers[i].is_ready:
@@ -182,12 +197,11 @@ class GesturePipeline:
 
         # Convert to tensor
         x = torch.from_numpy(features).unsqueeze(0).to(self._device)  # (1, S, F)
-        m = torch.from_numpy(mask).unsqueeze(0).to(self._device)      # (1, S)
+        m = torch.from_numpy(mask).unsqueeze(0).to(self._device)  # (1, S)
 
         result = self._model.predict(x, mask=m)
 
         class_id = result["class_id"].item()
-        confidence = result["confidence"].item()
         probs = result["class_probs"][0]
 
         # Check threshold
@@ -230,9 +244,12 @@ class GesturePipeline:
         if path.suffix == ".pt":
             state_dict = torch.load(str(path), map_location=self._device, weights_only=True)
             self._model.load_state_dict(state_dict)
-            logger.info(f"Loaded PyTorch model: {path.name} ({self._model.get_model_size_mb():.2f} MB)")
+            model_mb = self._model.get_model_size_mb()
+            logger.info(f"Loaded PyTorch model: {path.name} ({model_mb:.2f} MB)")
         else:
-            logger.warning(f"Unsupported model format: {path.suffix}. Use ONNX runtime for .onnx files.")
+            logger.warning(
+                f"Unsupported model format: {path.suffix}. Use ONNX runtime for .onnx files."
+            )
 
     def __enter__(self) -> GesturePipeline:
         self.start()

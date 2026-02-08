@@ -52,12 +52,14 @@ class StaticGestureClassifier(nn.Module):
         layers: list[nn.Module] = []
         prev_dim = input_dim
         for h in hidden_dims:
-            layers.extend([
-                nn.Linear(prev_dim, h),
-                nn.GELU(),
-                nn.BatchNorm1d(h),
-                nn.Dropout(dropout),
-            ])
+            layers.extend(
+                [
+                    nn.Linear(prev_dim, h),
+                    nn.GELU(),
+                    nn.BatchNorm1d(h),
+                    nn.Dropout(dropout),
+                ]
+            )
             prev_dim = h
         layers.append(nn.Linear(prev_dim, num_classes))
 
@@ -93,7 +95,7 @@ class StaticGestureClassifier(nn.Module):
         Returns:
             Dict with 'logits' (batch, num_classes) and 'confidence' (batch,).
         """
-        features = self._feature_layers(x)       # (B, last_hidden)
+        features = self._feature_layers(x)  # (B, last_hidden)
         logits = self._classifier_head(features)  # (B, num_classes)
         confidence = self.confidence_head(features).squeeze(-1)  # (B,)
         return {"logits": logits, "confidence": confidence}

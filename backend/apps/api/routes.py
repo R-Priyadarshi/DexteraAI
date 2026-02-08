@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import time
+from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
@@ -25,8 +26,10 @@ from loguru import logger
 
 from backend.apps.api.dependencies import get_settings
 from backend.apps.api.schemas import HealthResponse, PredictionResponse, PredictionResult
-from backend.config import Settings
 from core.inference.pipeline import GesturePipeline, PipelineConfig
+
+if TYPE_CHECKING:
+    from backend.config import Settings
 
 router = APIRouter()
 
@@ -45,6 +48,7 @@ def _get_pipeline() -> GesturePipeline:
 
 # ── Health ───────────────────────────────────────────────────
 
+
 @router.get("/health", response_model=HealthResponse, tags=["System"])
 async def health_check(
     settings: Settings = Depends(get_settings),
@@ -62,6 +66,7 @@ async def health_check(
 
 
 # ── Prediction ───────────────────────────────────────────────
+
 
 @router.post("/predict", response_model=PredictionResponse, tags=["Inference"])
 async def predict(
@@ -113,6 +118,7 @@ async def predict(
 
 # ── WebSocket Real-Time Stream ───────────────────────────────
 
+
 @router.websocket("/ws/stream")
 async def websocket_stream(ws: WebSocket) -> None:
     """Real-time gesture prediction over WebSocket.
@@ -147,20 +153,22 @@ async def websocket_stream(ws: WebSocket) -> None:
             result = pipeline.process_frame(bgr_image)
             latency = (time.perf_counter() - t0) * 1000
 
-            await ws.send_json({
-                "frame_id": frame_count,
-                "gestures": [
-                    {
-                        "gesture_name": g.gesture_name,
-                        "gesture_id": g.gesture_id,
-                        "confidence": round(g.confidence, 4),
-                    }
-                    for g in result.gestures
-                ],
-                "num_hands": len(result.hands),
-                "inference_ms": round(latency, 2),
-                "privacy_mode": "on-device",
-            })
+            await ws.send_json(
+                {
+                    "frame_id": frame_count,
+                    "gestures": [
+                        {
+                            "gesture_name": g.gesture_name,
+                            "gesture_id": g.gesture_id,
+                            "confidence": round(g.confidence, 4),
+                        }
+                        for g in result.gestures
+                    ],
+                    "num_hands": len(result.hands),
+                    "inference_ms": round(latency, 2),
+                    "privacy_mode": "on-device",
+                }
+            )
 
     except WebSocketDisconnect:
         logger.info("WebSocket client disconnected | frames={}", frame_count)

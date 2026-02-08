@@ -16,11 +16,12 @@ from core.types import HandLandmarks
 
 class NormalizationMode(Enum):
     """Available normalization strategies."""
-    WRIST_CENTERED = auto()        # Translate wrist to origin
-    PALM_CENTERED = auto()         # Translate palm center to origin
-    SCALE_INVARIANT = auto()       # + normalize to unit scale
-    ROTATION_INVARIANT = auto()    # + align wrist-middle finger axis
-    FULL = auto()                  # All of the above
+
+    WRIST_CENTERED = auto()  # Translate wrist to origin
+    PALM_CENTERED = auto()  # Translate palm center to origin
+    SCALE_INVARIANT = auto()  # + normalize to unit scale
+    ROTATION_INVARIANT = auto()  # + align wrist-middle finger axis
+    FULL = auto()  # All of the above
 
 
 class LandmarkNormalizer:
@@ -123,10 +124,13 @@ class LandmarkNormalizer:
         # Rotation matrix to align direction with [0, 1] (Y-up)
         cos_a = direction[1]
         sin_a = direction[0]
-        rot = np.array([
-            [cos_a, sin_a, 0],
-            [-sin_a, cos_a, 0],
-            [0, 0, 1],
-        ], dtype=np.float32)
+        rot = np.array(
+            [
+                [cos_a, sin_a, 0],
+                [-sin_a, cos_a, 0],
+                [0, 0, 1],
+            ],
+            dtype=np.float32,
+        )
 
         return (rot @ lm.T).T

@@ -37,8 +37,11 @@ class TestONNXInferenceRuntime:
     def test_load_and_predict(self) -> None:
         """Full round-trip: create model → export ONNX → load → predict."""
         model = GestureTransformer(
-            input_dim=86, num_classes=10,
-            d_model=32, nhead=2, num_layers=2,
+            input_dim=86,
+            num_classes=10,
+            d_model=32,
+            nhead=2,
+            num_layers=2,
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -56,10 +59,12 @@ class TestONNXInferenceRuntime:
             assert "input" in rt.input_names
             assert "logits" in rt.output_names
 
-            result = rt.predict({
-                "input": np.random.randn(1, 30, 86).astype(np.float32),
-                "mask": np.zeros((1, 30), dtype=bool),
-            })
+            result = rt.predict(
+                {
+                    "input": np.random.randn(1, 30, 86).astype(np.float32),
+                    "mask": np.zeros((1, 30), dtype=bool),
+                }
+            )
 
             assert "logits" in result
             assert result["logits"].shape == (1, 10)
@@ -73,8 +78,11 @@ class TestExportToONNX:
     @pytest.mark.slow
     def test_export_creates_file(self) -> None:
         model = GestureTransformer(
-            input_dim=86, num_classes=10,
-            d_model=32, nhead=2, num_layers=2,
+            input_dim=86,
+            num_classes=10,
+            d_model=32,
+            nhead=2,
+            num_layers=2,
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -89,8 +97,11 @@ class TestExportToONNX:
     @pytest.mark.slow
     def test_export_output_matches_pytorch(self) -> None:
         model = GestureTransformer(
-            input_dim=86, num_classes=5,
-            d_model=32, nhead=2, num_layers=2,
+            input_dim=86,
+            num_classes=5,
+            d_model=32,
+            nhead=2,
+            num_layers=2,
         )
         model.eval()
 
@@ -100,11 +111,15 @@ class TestExportToONNX:
             onnx_path = export_to_onnx(model, Path(tmpdir) / "test.onnx")
 
             import onnxruntime as ort
+
             sess = ort.InferenceSession(str(onnx_path))
-            ort_out = sess.run(None, {
-                "input": dummy.numpy(),
-                "mask": np.zeros((1, 30), dtype=bool),
-            })
+            ort_out = sess.run(
+                None,
+                {
+                    "input": dummy.numpy(),
+                    "mask": np.zeros((1, 30), dtype=bool),
+                },
+            )
 
             with torch.no_grad():
                 pt_out = model(dummy)

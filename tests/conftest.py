@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 import pytest
-import torch
 
-from core.types import HandLandmarks, Handedness, NUM_HAND_LANDMARKS, LANDMARK_DIMS
+from core.types import LANDMARK_DIMS, NUM_HAND_LANDMARKS, Handedness, HandLandmarks
+
+if TYPE_CHECKING:
+    import torch
 
 
 @pytest.fixture
@@ -37,9 +41,7 @@ def batch_landmarks() -> list[HandLandmarks]:
 @pytest.fixture
 def dummy_bgr_frame() -> np.ndarray:
     """Generate a dummy 480x640 BGR frame."""
-    return np.random.default_rng(42).integers(
-        0, 256, (480, 640, 3), dtype=np.uint8
-    )
+    return np.random.default_rng(42).integers(0, 256, (480, 640, 3), dtype=np.uint8)
 
 
 @pytest.fixture

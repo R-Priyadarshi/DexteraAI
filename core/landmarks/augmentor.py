@@ -26,6 +26,7 @@ class AugmentationConfig:
         flip_probability: Probability of horizontal flip.
         drop_landmark_probability: Probability of dropping each landmark (set to 0).
     """
+
     rotation_range_deg: float = 15.0
     scale_range: tuple[float, float] = (0.85, 1.15)
     translation_range: float = 0.05
@@ -112,11 +113,14 @@ class LandmarkAugmentor:
         angle_rad = np.deg2rad(angle_deg)
         cos_a = np.cos(angle_rad)
         sin_a = np.sin(angle_rad)
-        rot = np.array([
-            [cos_a, -sin_a, 0],
-            [sin_a, cos_a, 0],
-            [0, 0, 1],
-        ], dtype=np.float32)
+        rot = np.array(
+            [
+                [cos_a, -sin_a, 0],
+                [sin_a, cos_a, 0],
+                [0, 0, 1],
+            ],
+            dtype=np.float32,
+        )
         return (rot @ lm.T).T
 
     def _random_scale(self, lm: np.ndarray) -> np.ndarray:

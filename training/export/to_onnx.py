@@ -11,6 +11,7 @@ Handles:
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import onnx
@@ -18,7 +19,8 @@ import onnxruntime as ort
 import torch
 from loguru import logger
 
-from core.temporal.model import GestureTransformer
+if TYPE_CHECKING:
+    from core.temporal.model import GestureTransformer
 
 
 def export_to_onnx(
@@ -74,9 +76,7 @@ def export_to_onnx(
             super().__init__()
             self.base = base_model
 
-        def forward(
-            self, x: torch.Tensor, mask: torch.Tensor
-        ) -> tuple[torch.Tensor, torch.Tensor]:
+        def forward(self, x: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
             out = self.base(x, mask=mask)
             return out["logits"], out["confidence"]
 
@@ -120,7 +120,7 @@ def quantize_onnx(
     Returns:
         Path to the quantized ONNX model.
     """
-    from onnxruntime.quantization import quantize_dynamic, QuantType
+    from onnxruntime.quantization import QuantType, quantize_dynamic
 
     input_path = Path(input_path)
     if output_path is None:
@@ -176,11 +176,6 @@ def _validate_onnx(
     matches = max_diff < atol
 
     if matches:
-        logger.info(
-            f"ONNX validation PASSED (max diff: {max_diff:.6f})"
-        )
+        logger.info(f"ONNX validation PASSED (max diff: {max_diff:.6f})")
     else:
-        logger.warning(
-            f"ONNX validation FAILED (max diff: {max_diff:.6f}, "
-            f"tolerance: {atol})"
-        )
+        logger.warning(f"ONNX validation FAILED (max diff: {max_diff:.6f}, tolerance: {atol})")

@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-
 # ── Prediction ───────────────────────────────────────────────
+
 
 class PredictionResult(BaseModel):
     gesture_name: str = Field(..., description="Recognized gesture label")
@@ -28,6 +28,7 @@ class PredictionResponse(BaseModel):
 
 
 # ── Health ───────────────────────────────────────────────────
+
 
 class HealthResponse(BaseModel):
     status: str = "healthy"

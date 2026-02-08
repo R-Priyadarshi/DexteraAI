@@ -8,11 +8,14 @@ from __future__ import annotations
 
 from collections import deque
 from threading import Lock
+from typing import TYPE_CHECKING
 
 import numpy as np
 
-from core.types import HandLandmarks
 from core.landmarks.features import LandmarkFeatureExtractor
+
+if TYPE_CHECKING:
+    from core.types import HandLandmarks
 
 
 class SequenceBuffer:

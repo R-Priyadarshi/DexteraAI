@@ -13,7 +13,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 
-from core.types import HandLandmarks, Handedness, NUM_HAND_LANDMARKS, LANDMARK_DIMS
+from core.types import LANDMARK_DIMS, NUM_HAND_LANDMARKS, Handedness, HandLandmarks
 
 
 class MediaPipeHandDetector:
@@ -114,16 +114,20 @@ class MediaPipeHandDetector:
                 label = classification.label.lower()
                 confidence = classification.score
                 handedness = (
-                    Handedness.LEFT if label == "left" else
-                    Handedness.RIGHT if label == "right" else
-                    Handedness.UNKNOWN
+                    Handedness.LEFT
+                    if label == "left"
+                    else Handedness.RIGHT
+                    if label == "right"
+                    else Handedness.UNKNOWN
                 )
 
-            hands.append(HandLandmarks(
-                landmarks=landmarks,
-                handedness=handedness,
-                confidence=confidence,
-            ))
+            hands.append(
+                HandLandmarks(
+                    landmarks=landmarks,
+                    handedness=handedness,
+                    confidence=confidence,
+                )
+            )
 
         return hands
 

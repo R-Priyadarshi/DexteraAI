@@ -15,6 +15,7 @@ NOTE: This is OPTIONAL. The core ML pipeline (core/) runs without a server.
 from __future__ import annotations
 
 import time
+from collections.abc import AsyncIterator  # noqa: TCH003 — needed at runtime
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -22,10 +23,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
 from loguru import logger
 
+from backend.apps.api.middleware import RequestIDMiddleware, SecurityHeadersMiddleware
+from backend.apps.api.routes import router as api_router
 from backend.config import settings
 from backend.logging_config import setup_logging
-from backend.apps.api.routes import router as api_router
-from backend.apps.api.middleware import RequestIDMiddleware, SecurityHeadersMiddleware
 
 _start_time: float = 0.0
 
@@ -35,7 +36,7 @@ def get_uptime() -> float:
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):  # noqa: ANN001
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: ANN001
     """Startup / shutdown lifecycle."""
     global _start_time
     _start_time = time.time()
