@@ -1,0 +1,92 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dextera-ai"
+version = "0.1.0"
+description = "Real-time, on-device, privacy-preserving hand-gesture recognition platform"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+authors = [
+    {name = "R-Priyadarshi"},
+]
+
+dependencies = [
+    "mediapipe>=0.10.14",
+    "torch>=2.3.0",
+    "torchvision>=0.18.0",
+    "onnx>=1.16.0",
+    "onnxruntime>=1.18.0",
+    "numpy>=1.26.0",
+    "opencv-python-headless>=4.10.0",
+    "scipy>=1.13.0",
+    "scikit-learn>=1.5.0",
+    "pydantic>=2.7.0",
+    "loguru>=0.7.0",
+    "tqdm>=4.66.0",
+    "Pillow>=10.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-cov>=5.0.0",
+    "pytest-benchmark>=4.0.0",
+    "hypothesis>=6.100.0",
+    "ruff>=0.4.0",
+    "mypy>=1.10.0",
+    "pre-commit>=3.7.0",
+]
+training = [
+    "mlflow>=2.13.0",
+    "dvc>=3.50.0",
+    "tensorboard>=2.16.0",
+    "albumentations>=1.4.0",
+]
+api = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0",
+    "pydantic-settings>=2.3.0",
+    "orjson>=3.10.0",
+    "redis>=5.0.0",
+    "asyncpg>=0.29.0",
+]
+tflite = [
+    "tensorflow>=2.16.0",
+    "ai-edge-litert>=1.0.0",
+]
+
+[project.scripts]
+dextera = "dextera:main"
+
+[tool.setuptools.packages.find]
+include = ["core*", "training*", "backend*"]
+
+[tool.setuptools]
+py-modules = ["dextera"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "ANN", "B", "SIM", "TCH"]
+ignore = ["ANN101", "ANN102"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short --strict-markers"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "gpu: marks tests requiring GPU",
+    "integration: marks integration tests",
+]

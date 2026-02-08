@@ -1,0 +1,11 @@
+# DVC Configuration for dataset versioning
+[core]
+    remote = local_storage
+    autostage = true
+
+['remote "local_storage"']
+    url = /tmp/dvc_storage
+
+# For production, use cloud storage:
+# ['remote "s3_storage"']
+#     url = s3://dextera-ai-datasets

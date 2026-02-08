@@ -1,0 +1,52 @@
+# ============================================================
+#  Dextera AI — GitHub Actions CI/CD (Reference Copy)
+# ============================================================
+#  The canonical CI config lives at .github/workflows/ci.yml
+#  This file is kept for reference / MLOps documentation only.
+# ============================================================
+name: CI
+
+on:
+  push:
+    branches: [main, next-gen]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - run: pip install -e ".[dev]"
+      - run: ruff check core/ training/ tests/
+      - run: ruff format --check core/ training/ tests/
+      - run: mypy core/ training/ --ignore-missing-imports
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+      - run: pip install -e ".[dev]"
+      - run: pytest tests/ -v --tb=short -m "not slow and not gpu"
+
+  build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t dextera-ai:${{ github.sha }} .
+      - run: docker run --rm dextera-ai:${{ github.sha }} python dextera.py info

@@ -1,0 +1,62 @@
+stages:
+  # NOTE: extract_landmarks and prepare_sequences stages require
+  # implementing the corresponding scripts. Uncomment when ready.
+  #
+  # extract_landmarks:
+  #   cmd: python -m training.datasets.extract_landmarks
+  #     --input data/raw/videos
+  #     --output data/processed/landmarks
+  #   deps:
+  #     - data/raw/videos
+  #     - training/datasets/extract_landmarks.py
+  #   outs:
+  #     - data/processed/landmarks
+  #
+  # prepare_sequences:
+  #   cmd: python -m training.datasets.prepare_sequences
+  #     --input data/processed/landmarks
+  #     --output data/sequences
+  #     --seq-len 30
+  #   deps:
+  #     - data/processed/landmarks
+  #     - training/datasets/prepare_sequences.py
+  #   outs:
+  #     - data/sequences
+
+  train:
+    cmd: python dextera.py train
+      --dataset data/sequences
+      --epochs 100
+      --device auto
+    deps:
+      - data/sequences
+      - core/temporal/model.py
+      - training/trainers/train_gesture.py
+    outs:
+      - checkpoints/best.pt
+    metrics:
+      - reports/train_metrics.json:
+          cache: false
+
+  evaluate:
+    cmd: python dextera.py eval
+      --checkpoint checkpoints/best.pt
+      --dataset data/sequences
+      --output reports/eval.json
+    deps:
+      - checkpoints/best.pt
+      - data/sequences
+    metrics:
+      - reports/eval.json:
+          cache: false
+
+  export_onnx:
+    cmd: python dextera.py export
+      --checkpoint checkpoints/best.pt
+      --format onnx
+      --quantize
+    deps:
+      - checkpoints/best.pt
+    outs:
+      - models/gesture.onnx
+      - models/gesture_quant.onnx

@@ -1,0 +1,80 @@
+# ── Byte-compiled / cached ──
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# ── Virtual environments ──
+.venv/
+venv/
+env/
+
+# ── IDE ──
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+
+# ── Env files ──
+.env
+.env.local
+.env.*.local
+
+# ── ML artifacts ──
+*.onnx
+*.tflite
+*.pt
+*.pth
+*.pkl
+*.pickle
+checkpoints/
+models/*.onnx
+models/*.tflite
+!models/.gitkeep
+
+# ── MLflow ──
+mlruns/
+mlartifacts/
+mlflow.db
+
+# ── DVC ──
+/data
+*.dvc.lock
+
+# ── Logs ──
+logs/
+*.log
+
+# ── Coverage ──
+.coverage
+htmlcov/
+.pytest_cache/
+.hypothesis/
+.benchmarks/
+
+# ── SQLite DBs ──
+*.db
+
+# ── Node (web app) ──
+node_modules/
+.next/
+out/
+apps/web/.next/
+apps/web/node_modules/
+
+# ── Flutter ──
+apps/mobile/.dart_tool/
+apps/mobile/build/
+
+# ── Tauri ──
+apps/desktop/src-tauri/target/

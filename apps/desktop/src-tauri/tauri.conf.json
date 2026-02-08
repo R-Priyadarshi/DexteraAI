@@ -1,0 +1,36 @@
+{
+  "productName": "DexteraAI",
+  "version": "0.1.0",
+  "identifier": "ai.dextera.desktop",
+  "build": {
+    "beforeDevCommand": "cd ../web && npm run dev",
+    "devUrl": "http://localhost:3000",
+    "beforeBuildCommand": "cd ../web && npm run build",
+    "frontendDist": "../web/out"
+  },
+  "app": {
+    "title": "DexteraAI — Gesture Intelligence",
+    "windows": [
+      {
+        "title": "DexteraAI",
+        "width": 1280,
+        "height": 720,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self'; media-src 'self' mediastream:; script-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

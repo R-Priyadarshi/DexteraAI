@@ -1,0 +1,45 @@
+# ============================================================
+#  Dextera AI — DVC Pipeline (Reference Copy)
+# ============================================================
+#  The canonical DVC config lives at the project root: dvc.yaml
+#  This file is kept for reference / MLOps documentation only.
+# ============================================================
+
+stages:
+  train:
+    cmd: python dextera.py train
+      --dataset data/sequences
+      --epochs 100
+      --device auto
+    deps:
+      - data/sequences
+      - core/temporal/model.py
+      - training/trainers/train_gesture.py
+    outs:
+      - checkpoints/best.pt
+    metrics:
+      - reports/train_metrics.json:
+          cache: false
+
+  evaluate:
+    cmd: python dextera.py eval
+      --checkpoint checkpoints/best.pt
+      --dataset data/sequences
+      --output reports/eval.json
+    deps:
+      - checkpoints/best.pt
+      - data/sequences
+    metrics:
+      - reports/eval.json:
+          cache: false
+
+  export_onnx:
+    cmd: python dextera.py export
+      --checkpoint checkpoints/best.pt
+      --format onnx
+      --quantize
+    deps:
+      - checkpoints/best.pt
+    outs:
+      - models/gesture.onnx
+      - models/gesture_quant.onnx

@@ -1,0 +1,30 @@
+# ============================================================
+#  Dextera AI — Docker Compose
+# ============================================================
+version: "3.9"
+
+services:
+  dextera:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dextera-ai
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_ENV=production
+      - DEBUG=false
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./models:/app/models:ro
+      - ./data:/app/data:ro
+      - dextera-logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  dextera-logs:
