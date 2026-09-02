@@ -40,6 +40,7 @@ dev = [
     "pre-commit>=3.7.0",
 ]
 training = [
+    "datasets>=2.19.0",
     "mlflow>=2.13.0",
     "dvc>=3.50.0",
     "tensorboard>=2.16.0",
@@ -77,15 +78,52 @@ ignore = ["ANN401"]
 
 [tool.ruff.lint.per-file-ignores]
 "core/temporal/*.py" = ["N812"]  # Allow `import torch.nn.functional as F` (PyTorch convention)
+"training/evaluation/*.py" = ["N812"]  # same PyTorch convention
 "tests/*.py" = ["ANN"]          # Don't require type annotations in tests
 "backend/apps/api/routes.py" = ["B008"]  # FastAPI Depends/File in defaults is idiomatic
 
 [tool.mypy]
 python_version = "3.11"
+# backend/experimental holds unmounted sketches that are not part of the product.
+# See backend/experimental/README.md.
+exclude = ["backend/experimental/"]
 strict = true
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = [
+    "mediapipe",
+    "mediapipe.*",
+    "onnxruntime",
+    "onnxruntime.*",
+    "cv2",
+    "cv2.*",
+    "mlflow.*",
+    "optuna.*",
+    "datasets.*",
+    "sklearn.*",
+    "tqdm",
+    "tqdm.*",
+    "tensorflow",
+    "tensorflow.*",
+    "onnx_tf",
+    "onnx_tf.*",
+    "torch.amp",
+    "onnx_tf.backend",
+]
+ignore_missing_imports = true
+disable_error_code = ["import-untyped", "attr-defined"]
+
+[[tool.mypy.overrides]]
+module = ["training.trainers.*"]
+disable_error_code = ["attr-defined"]
+
+# TFLite export depends on the optional [tflite] extra, absent in most installs.
+[[tool.mypy.overrides]]
+module = ["training.export.to_tflite"]
+disable_error_code = ["import-untyped", "import-not-found"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

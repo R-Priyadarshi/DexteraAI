@@ -31,6 +31,15 @@ jobs:
       - name: MyPy type check
         run: mypy core/ training/ --ignore-missing-imports
 
+      - name: Bandit security scan
+        run: bandit -r core/ training/ backend/ --skip B101,B102,B103
+
+      - name: Trivy container scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+
   test:
     name: Tests
     runs-on: ${{ matrix.os }}
@@ -56,6 +65,27 @@ jobs:
       - name: Run tests with coverage
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
         run: pytest tests/ -v --cov=core --cov=training --cov-report=xml
+
+      - name: Upload coverage report
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+        uses: codecov/codecov-action@v3
+        with:
+          file: coverage.xml
+
+      - name: Build and push Docker image
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+        run: |
+          docker build -t dextera-ai:${{ github.sha }} .
+          echo ${{ secrets.DOCKERHUB_TOKEN }} | docker login --username ${{ secrets.DOCKERHUB_USERNAME }} --password-stdin
+          docker push dextera-ai:${{ github.sha }}
+
+      - name: Notify Slack on failure
+        if: failure()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          fields: repo,commit,author
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
 
   benchmark:
     name: Performance Benchmark
