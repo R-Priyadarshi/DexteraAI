@@ -69,7 +69,10 @@ class Settings(BaseSettings):
     @classmethod
     def _parse_cors(cls, v: str | list[str]) -> list[str]:
         if isinstance(v, str):
-            return json.loads(v)
+            parsed = json.loads(v)
+            if not isinstance(parsed, list):
+                raise ValueError("cors_origins must be a JSON array of strings")
+            return [str(origin) for origin in parsed]
         return v
 
     @property
