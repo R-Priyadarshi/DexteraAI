@@ -46,7 +46,40 @@
 │  │    MLflow · DVC · GitHub Actions · Benchmarks     │      │
 │  └──────────────────────────────────────────────────┘      │
 └─────────────────────────────────────────────────────────────┘
-```
+---
+
+## Module Overview
+
+- **Training**: Distributed, plugin/callback, MLflow, Optuna, robust experiment tracking.
+- **Inference**: Modular pipeline, ONNX/TFLite, batch/streaming, privacy, plugin/callbacks.
+- **Calibration**: Per-user, plugin/callbacks, privacy, metrics.
+- **Export**: ONNX/TFLite, plugin/callbacks, privacy, validation, versioning.
+- **Integration**: Web, mobile, desktop, edge, plugin marketplace, API/CLI/SDK.
+
+---
+
+## Privacy & Security
+
+- All inference and calibration can run fully on-device.
+- No user data leaves device unless explicitly enabled.
+- Enterprise logging, error handling, and metrics.
+
+---
+
+## Developer Experience
+
+- Modular, extensible architecture (plugin/callbacks everywhere)
+- CLI, API, SDK, and plugin marketplace
+- Automated onboarding, documentation, and integration
+- MLflow, DVC, GitHub Actions, benchmarks for MLOps
+
+---
+
+## Performance & Scale
+
+- Real-time inference (<20ms per frame)
+- Distributed training, robust experiment tracking
+- Global deployment, accessibility, internationalization
 
 ## Data Flow
 
@@ -83,14 +116,14 @@
 
 | Module | Responsibility |
 |--------|---------------|
-| `core/vision` | MediaPipe hand detection, frame preprocessing |
-| `core/landmarks` | Normalization, augmentation, feature extraction |
+| `core/vision` | MediaPipe Tasks hand detection, holistic (hands + pose) detection, frame preprocessing |
+| `core/landmarks` | Normalization, augmentation, 86-dim hand features, 208-dim holistic features |
 | `core/temporal` | Transformer model, sequence buffering |
 | `core/inference` | ONNX/TFLite runtime, full pipeline orchestration |
 | `core/calibration` | Per-user gesture calibration |
-| `training/datasets` | Dataset loading, DVC integration |
+| `training/datasets` | Landmark extraction from image corpora, dataset merging, DVC integration |
 | `training/trainers` | PyTorch training loop with AMP, MLflow |
-| `training/evaluation` | Metrics, benchmarks, model cards |
+| `training/evaluation` | Metrics, latency benchmarks, confidence calibration |
 | `training/export` | ONNX and TFLite conversion + quantization |
 | `apps/web` | Browser-based demo (React + WebGPU) |
 | `apps/desktop` | Native desktop app (Tauri) |
