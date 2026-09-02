@@ -96,3 +96,6 @@ apps/web/public/onnx/mediapipe/
 apps/web/public/onnx/**/*.onnx
 apps/web/public/onnx/**/*.onnx.data
 !apps/web/public/onnx/**/labels.json
+
+# TypeScript incremental build cache
+*.tsbuildinfo
