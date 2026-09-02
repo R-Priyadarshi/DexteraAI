@@ -1,198 +1,88 @@
-"use client";
+import Link from "next/link";
 
-import { useEffect, useRef, useState, useCallback } from "react";
-import { GestureEngine, type GestureResult } from "@/lib/gesture-engine";
+export default function LandingPage() {
+    return (
+        <div className="relative min-h-screen overflow-hidden bg-[#050505]">
+            {/* Cinematic Background Layer */}
+            <div className="absolute inset-0 neural-grid opacity-20 pointer-events-none" />
+            <div className="absolute top-[-10%] left-[-10%] right-[-10%] bottom-[-10%] neural-glow animate-pulse-soft pointer-events-none" />
 
-export default function Home() {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const engineRef = useRef<GestureEngine | null>(null);
+            {/* Decorative Orbs */}
+            <div className="absolute top-[20%] left-[10%] h-96 w-96 rounded-full bg-blue-500/10 blur-[120px] animate-float" />
+            <div className="absolute bottom-[10%] right-[10%] h-[30rem] w-[30rem] rounded-full bg-slate-800/20 blur-[150px] animate-float" style={{ animationDelay: "-5s" }} />
 
-  const [isRunning, setIsRunning] = useState(false);
-  const [gesture, setGesture] = useState<GestureResult | null>(null);
-  const [fps, setFps] = useState(0);
-  const [latency, setLatency] = useState(0);
-  const [error, setError] = useState<string | null>(null);
+            <nav className="fixed top-0 z-50 flex w-full items-center justify-between px-8 py-10 lg:px-20">
+                <div className="flex items-center gap-3">
+                    <div className="h-[2px] w-6 bg-blue-500" />
+                    <span className="text-sm font-medium tracking-[0.3em] text-[#f5f5f7] uppercase">DexteraAI</span>
+                </div>
+                <div className="hidden lg:flex items-center gap-12">
+                    {["Intelligence", "Security", "Ecosystem"].map((item) => (
+                        <span key={item} className="text-[10px] font-bold tracking-[0.2em] text-[#86868b] uppercase cursor-pointer hover:text-white transition-colors">{item}</span>
+                    ))}
+                </div>
+            </nav>
 
-  const startCamera = useCallback(async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          facingMode: "user",
-          frameRate: { ideal: 60 },
-        },
-      });
+            <main className="relative z-10 flex flex-col items-center px-6 pt-40 lg:pt-56">
+                <div className="flex flex-col items-center text-center space-y-8 w-full max-w-none px-6 lg:px-20">
+                    <div className="spatial-panel rounded-full px-5 py-1.5 animate-in fade-in slide-in-from-bottom-4 duration-1000">
+                        <span className="text-[10px] font-bold tracking-[0.3em] text-blue-500 uppercase">Industrial Standard v0.1</span>
+                    </div>
 
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-      }
+                    <h1 className="text-5xl lg:text-8xl font-light tracking-tighter leading-[1.1] reveal-text animate-in fade-in slide-in-from-bottom-8 duration-1000 delay-200">
+                        Hand-Biometric <br />
+                        <span className="font-medium">Intelligence.</span>
+                    </h1>
 
-      // Initialize gesture engine
-      const engine = new GestureEngine();
-      await engine.initialize();
-      engineRef.current = engine;
+                    <p className="max-w-2xl text-lg lg:text-xl font-light text-[#86868b] leading-relaxed animate-in fade-in slide-in-from-bottom-12 duration-1000 delay-500">
+                        Redefining human-machine interaction through zero-latency spatial compute.
+                        100% On-device. 100% Private. Built for the trillion-dollar age.
+                    </p>
 
-      setIsRunning(true);
-      setError(null);
-      runInferenceLoop();
-    } catch (err) {
-      setError(
-        `Camera access denied or unavailable: ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
-  }, []);
+                    <div className="pt-12 animate-in fade-in slide-in-from-bottom-16 duration-1000 delay-700">
+                        <Link href="/dashboard">
+                            <button className="group relative flex items-center gap-8 overflow-hidden rounded-full bg-white px-10 py-5 transition-all hover:scale-[1.02] active:scale-[0.98]">
+                                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-black/[0.05] to-transparent animate-shimmer opacity-0 group-hover:opacity-100" />
+                                <span className="text-sm font-semibold tracking-widest text-black uppercase">Enter Command Center</span>
+                                <div className="h-px w-6 bg-black/20 group-hover:w-10 transition-all duration-500" />
+                            </button>
+                        </Link>
+                    </div>
+                </div>
 
-  const stopCamera = useCallback(() => {
-    if (videoRef.current?.srcObject) {
-      const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
-      tracks.forEach((t) => t.stop());
-      videoRef.current.srcObject = null;
-    }
-    engineRef.current?.dispose();
-    engineRef.current = null;
-    setIsRunning(false);
-    setGesture(null);
-  }, []);
+                {/* Feature Triptych */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-10 mt-40 lg:mt-60 w-full pb-20 px-10 lg:px-20 animate-in fade-in slide-in-from-bottom-20 duration-1000 delay-1000">
+                    <div className="flex flex-col space-y-4 group p-8 rounded-3xl border border-white/5 bg-white/[0.02] hover:bg-white/[0.04] transition-all cursor-crosshair">
+                        <span className="text-xs font-bold tracking-widest text-blue-500 uppercase">01. Intelligence</span>
+                        <h3 className="text-2xl font-light text-white">Under 5ms.</h3>
+                        <p className="text-sm text-[#86868b] leading-relaxed">Proprietary Transformer-based architecture optimized for edge GPU execution.</p>
+                        <div className="h-px w-full bg-white/5 mt-4 overflow-hidden">
+                            <div className="h-full w-2/3 bg-blue-500 animate-shimmer" />
+                        </div>
+                    </div>
+                    <div className="flex flex-col space-y-4 group p-8 rounded-3xl border border-white/5 bg-white/[0.02] hover:bg-white/[0.04] transition-all cursor-crosshair">
+                        <span className="text-xs font-bold tracking-widest text-blue-500 uppercase">02. Security</span>
+                        <h3 className="text-2xl font-light text-white">Edge Compute.</h3>
+                        <p className="text-sm text-[#86868b] leading-relaxed">No data leaves the device. Biometric signatures are processed and discarded in RAM.</p>
+                        <div className="flex gap-2 mt-4">
+                            <div className="h-1 w-1 rounded-full bg-green-500" />
+                            <span className="text-[8px] font-mono text-white/30 tracking-widest">ENCRYPTION_SAFE</span>
+                        </div>
+                    </div>
+                    <div className="flex flex-col space-y-4 group p-8 rounded-3xl border border-white/5 bg-white/[0.02] hover:bg-white/[0.04] transition-all cursor-crosshair">
+                        <span className="text-xs font-bold tracking-widest text-blue-500 uppercase">03. Ecosystem</span>
+                        <h3 className="text-2xl font-light text-white">Universal.</h3>
+                        <p className="text-sm text-[#86868b] leading-relaxed">A seamless bridge between physical gestures and digital ecosystems.</p>
+                        <span className="text-[10px] text-blue-500/60 font-mono mt-4">v0.1.0_INDUSTRIAL</span>
+                    </div>
+                </div>
+            </main>
 
-  const runInferenceLoop = useCallback(() => {
-    let frameCount = 0;
-    let lastFpsTime = performance.now();
-
-    const loop = async () => {
-      if (
-        !videoRef.current ||
-        !canvasRef.current ||
-        !engineRef.current ||
-        videoRef.current.readyState < 2
-      ) {
-        if (engineRef.current) requestAnimationFrame(loop);
-        return;
-      }
-
-      const t0 = performance.now();
-      const result = await engineRef.current.processFrame(videoRef.current);
-      const t1 = performance.now();
-
-      setLatency(Math.round(t1 - t0));
-
-      if (result) {
-        setGesture(result);
-        drawLandmarks(canvasRef.current, result);
-      }
-
-      // FPS counter
-      frameCount++;
-      if (t1 - lastFpsTime >= 1000) {
-        setFps(frameCount);
-        frameCount = 0;
-        lastFpsTime = t1;
-      }
-
-      requestAnimationFrame(loop);
-    };
-
-    requestAnimationFrame(loop);
-  }, []);
-
-  const drawLandmarks = (
-    canvas: HTMLCanvasElement,
-    result: GestureResult
-  ) => {
-    const ctx = canvas.getContext("2d");
-    if (!ctx || !result.landmarks) return;
-
-    canvas.width = canvas.offsetWidth;
-    canvas.height = canvas.offsetHeight;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    // Draw landmarks as circles
-    ctx.fillStyle = "#6366f1";
-    for (const lm of result.landmarks) {
-      ctx.beginPath();
-      ctx.arc(lm.x * canvas.width, lm.y * canvas.height, 4, 0, 2 * Math.PI);
-      ctx.fill();
-    }
-  };
-
-  useEffect(() => {
-    return () => stopCamera();
-  }, [stopCamera]);
-
-  return (
-    <main className="flex min-h-screen flex-col items-center justify-center p-8">
-      {/* Header */}
-      <div className="mb-8 text-center">
-        <h1 className="text-5xl font-bold tracking-tight">
-          Dextera<span className="text-indigo-500">AI</span>
-        </h1>
-        <p className="mt-2 text-gray-400">
-          Real-time gesture intelligence — on device, private, instant
-        </p>
-      </div>
-
-      {/* Video + Canvas Container */}
-      <div className="relative w-full max-w-3xl overflow-hidden rounded-2xl border border-gray-800 bg-gray-950">
-        <video
-          ref={videoRef}
-          className="w-full mirror"
-          style={{ transform: "scaleX(-1)" }}
-          playsInline
-          muted
-        />
-        <canvas ref={canvasRef} className="landmark-canvas" />
-
-        {/* Overlay: gesture label */}
-        {gesture && (
-          <div className="absolute left-4 top-4 rounded-lg bg-black/60 px-4 py-2 backdrop-blur-sm">
-            <p className="text-2xl font-bold text-indigo-400">
-              {gesture.gestureName}
-            </p>
-            <p className="text-sm text-gray-400">
-              Confidence: {(gesture.confidence * 100).toFixed(1)}%
-            </p>
-          </div>
-        )}
-
-        {/* Overlay: performance stats */}
-        <div className="absolute bottom-4 right-4 rounded-lg bg-black/60 px-3 py-1 text-xs text-gray-400 backdrop-blur-sm">
-          {fps} FPS · {latency}ms
+            {/* Footer Branding */}
+            <footer className="relative z-10 flex w-full border-t border-white/[0.03] px-8 py-10 lg:px-20 items-center justify-between">
+                <span className="text-[9px] font-mono tracking-widest text-[#86868b] uppercase">Dextera Neural Systems Lab</span>
+                <span className="text-[9px] font-mono tracking-widest text-[#86868b] uppercase">Est. 2026 — Secure Biometry</span>
+            </footer>
         </div>
-      </div>
-
-      {/* Controls */}
-      <div className="mt-6 flex gap-4">
-        {!isRunning ? (
-          <button
-            onClick={startCamera}
-            className="rounded-lg bg-indigo-600 px-6 py-3 font-semibold transition hover:bg-indigo-500"
-          >
-            Start Gesture Detection
-          </button>
-        ) : (
-          <button
-            onClick={stopCamera}
-            className="rounded-lg bg-red-600 px-6 py-3 font-semibold transition hover:bg-red-500"
-          >
-            Stop
-          </button>
-        )}
-      </div>
-
-      {/* Error */}
-      {error && (
-        <div className="mt-4 rounded-lg bg-red-900/30 px-4 py-2 text-red-400">
-          {error}
-        </div>
-      )}
-
-      {/* Privacy Notice */}
-      <p className="mt-8 text-center text-xs text-gray-600">
-        🛡 All processing happens on your device. No video or images leave your
-        browser. Zero cloud. Zero tracking.
-      </p>
-    </main>
-  );
+    );
 }

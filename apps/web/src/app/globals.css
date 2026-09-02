@@ -1,21 +1,185 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
 
+@theme {
+  --font-sans: "Inter", "Outfit", ui-sans-serif, system-ui;
+  --color-blue-500: #0071e3;
+}
+
+/* Industrial Ultra Design System tokens */
 :root {
-  --bg-primary: #000000;
-  --bg-secondary: #0a0a0a;
-  --text-primary: #ffffff;
-  --text-secondary: #a0a0a0;
-  --accent: #6366f1;
-  --accent-hover: #818cf8;
-  --success: #22c55e;
-  --warning: #f59e0b;
-  --error: #ef4444;
+  --bg-deep: #050507;
+  --bg-surface: #0f0f12;
+  --glass-bg: rgba(20, 20, 25, 0.85);
+  --glass-border: rgba(255, 255, 255, 0.15);
+  --text-main: #ffffff;
+  --text-muted: #a1a1a6;
+  --accent-cyan: #00ffff;
+  --accent-blue: #0071e3;
+  --accent-magenta: #ff00ff;
+  --tactical-red: #ff3b30;
 }
 
 body {
-  font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  background-color: var(--bg-deep);
+  background-image: 
+    radial-gradient(circle at 50% -20%, rgba(0, 255, 255, 0.05), transparent 50%),
+    radial-gradient(circle at 0% 100%, rgba(0, 113, 227, 0.05), transparent 40%);
+  color: var(--text-main);
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.015em;
+  min-height: 100vh;
+  overflow-x: hidden;
+  font-family: var(--font-sans);
+}
+
+/* CRT Scanline Effect */
+.scanlines::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    rgba(18, 16, 16, 0) 50%,
+    rgba(0, 0, 0, 0.1) 50%
+  ),
+  linear-gradient(
+    90deg,
+    rgba(255, 0, 0, 0.02),
+    rgba(0, 255, 0, 0.01),
+    rgba(0, 0, 255, 0.02)
+  );
+  background-size: 100% 3px, 3px 100%;
+  pointer-events: none;
+  z-index: 100;
+  opacity: 0.3;
+}
+
+/* Holographic Vignette */
+.holographic-vignette {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    circle at center,
+    transparent 0%,
+    rgba(0, 0, 0, 0.4) 100%
+  );
+  pointer-events: none;
+  z-index: 50;
+}
+
+/* Tactical Glassmorphism */
+.spatial-card {
+  background: var(--glass-bg);
+  backdrop-filter: blur(50px) saturate(220%);
+  -webkit-backdrop-filter: blur(50px) saturate(220%);
+  border: 1px solid var(--glass-border);
+  box-shadow: 
+    0 10px 40px 0 rgba(0, 0, 0, 0.9),
+    inset 0 0 30px rgba(0, 255, 255, 0.05);
+  position: relative;
+  overflow: hidden;
+}
+
+.spatial-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(0, 255, 255, 0.2), transparent);
+  pointer-events: none;
+}
+
+.glass-panel {
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.spatial-card::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(135deg, rgba(255,255,255,0.05) 0%, transparent 100%);
+  pointer-events: none;
+}
+
+/* HUD Data Labels */
+.hud-label {
+  font-family: ui-monospace, monospace;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.25em;
+  color: var(--text-muted);
+}
+
+.hud-value-mono {
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  color: #fff;
+}
+
+/* Hex Grid Background */
+.hex-grid {
+  background-image: 
+    radial-gradient(circle at 2px 2px, rgba(255, 255, 255, 0.03) 1px, transparent 0);
+  background-size: 24px 24px;
+}
+
+/* Tactical Border Corners */
+.tactical-border {
+  position: relative;
+}
+
+.tactical-border::before,
+.tactical-border::after {
+  content: "";
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-color: rgba(255, 255, 255, 0.2);
+  border-style: solid;
+  pointer-events: none;
+}
+
+.tactical-border::before {
+  top: 0;
+  left: 0;
+  border-width: 2px 0 0 2px;
+}
+
+.tactical-border::after {
+  bottom: 0;
+  right: 0;
+  border-width: 0 2px 2px 0;
+}
+
+/* Animations */
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.animate-spin-slow {
+  animation: spin-slow 8s linear infinite;
+}
+
+/* Custom Minimalist Scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
 }
 
 /* Landmark overlay canvas */
@@ -26,4 +190,9 @@ body {
   width: 100%;
   height: 100%;
   pointer-events: none;
+  z-index: 10;
+}
+
+.mirror {
+  transform: scaleX(-1);
 }

@@ -1,0 +1,35 @@
+{
+  "labels": [
+    "call",
+    "dislike",
+    "fist",
+    "four",
+    "like",
+    "mute",
+    "ok",
+    "one",
+    "palm",
+    "peace",
+    "peace_inverted",
+    "rock",
+    "stop",
+    "stop_inverted",
+    "three",
+    "three2",
+    "two_up",
+    "two_up_inverted"
+  ],
+  "seq_len": 30,
+  "feature_dim": 86,
+  "val_accuracy": 0.9788,
+  "test_accuracy": 0.9814,
+  "calibration": {
+    "temperature": 0.736,
+    "rejection_threshold": 0.3,
+    "ece_before": 0.089,
+    "ece_after": 0.0174,
+    "accuracy": 0.9788,
+    "coverage_at_threshold": 0.9996,
+    "accuracy_at_threshold": 0.9792
+  }
+}
