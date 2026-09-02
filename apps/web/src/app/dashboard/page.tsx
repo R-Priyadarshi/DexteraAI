@@ -135,7 +135,11 @@ export default function Home() {
 
     // Decommissioned erratic sync useEffect in favor of In-Loop Sync
 
-    const stopCamera = () => {
+    // useCallback with a stable identity: an effect below depends on this and
+    // calls stopCamera() in its cleanup. Recreating it each render made that
+    // effect tear the camera down and re-register plugins on every state
+    // update, and the frame loop updates state ~10x a second.
+    const stopCamera = useCallback(() => {
         // 1. Release Hardware Tracks
         if (videoRef.current?.srcObject) {
             (videoRef.current.srcObject as MediaStream).getTracks().forEach(track => {
@@ -150,7 +154,7 @@ export default function Home() {
         voiceEngine.stop();
         tacticalAudio.stopNeuralHum();
         hapticEngine.pulse("sonar_ping");
-    };
+    }, []);
 
     // Stable Refs for Persistent Loop Data
     const frameCountRef = useRef(0);
