@@ -105,14 +105,52 @@ class TestGestureSequenceDataset:
         assert mask.shape == (30,)
 
     def test_padding_mask(self, tmp_path: Path) -> None:
+        """Variable-length sequences (e.g. video) are zero-padded and masked."""
         data_dir = self._create_dummy_dataset(tmp_path, n=5)
-        ds = GestureSequenceDataset(data_dir, seq_len=100)
+        ds = GestureSequenceDataset(data_dir, seq_len=100, expand_static=False)
         features, _, mask = ds[0]
         # Since we set seq_len=100 and data is 15-40 frames,
         # most of the mask should be True (padded)
         assert mask.any()
         # First frame should not be masked
         assert not mask[0].item()
+
+    def test_expand_static_fills_window(self, tmp_path: Path) -> None:
+        """Static/short samples are stretched across the window, not padded.
+
+        Training data then has the same shape as the live inference buffer,
+        which holds seq_len frames of a held gesture.
+        """
+        data_dir = self._create_dummy_dataset(tmp_path, n=5)
+        ds = GestureSequenceDataset(data_dir, seq_len=100, expand_static=True)
+        features, _, mask = ds[0]
+        assert not mask.any(), "expanded sequences should have no padded positions"
+        assert features.shape == (100, 86)
+        assert features.abs().sum() > 0
+
+    def test_get_labels_matches_getitem(self, tmp_path: Path) -> None:
+        """The fast label path must agree with the full sample pipeline."""
+        data_dir = self._create_dummy_dataset(tmp_path, n=8)
+        ds = GestureSequenceDataset(data_dir, seq_len=30)
+
+        fast = ds.get_labels()
+        slow = [int(ds[i][1]) for i in range(len(ds))]
+
+        assert fast == slow
+        assert len(fast) == len(ds)
+
+    def test_get_labels_respects_indices(self, tmp_path: Path) -> None:
+        data_dir = self._create_dummy_dataset(tmp_path, n=10)
+        subset = GestureSequenceDataset(data_dir, seq_len=30, indices=[1, 3, 5])
+        assert len(subset.get_labels()) == 3
+
+    def test_indices_subset(self, tmp_path: Path) -> None:
+        """Index subsetting keeps train/val/test splits from sharing files."""
+        data_dir = self._create_dummy_dataset(tmp_path, n=10)
+        full = GestureSequenceDataset(data_dir, seq_len=30)
+        subset = GestureSequenceDataset(data_dir, seq_len=30, indices=[0, 2, 4])
+        assert len(full) == 10
+        assert len(subset) == 3
 
     def test_augmentation(self, tmp_path: Path) -> None:
         data_dir = self._create_dummy_dataset(tmp_path, n=5)

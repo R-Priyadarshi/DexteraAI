@@ -27,7 +27,7 @@ class TestHandLandmarks:
         hand = HandLandmarks(landmarks=landmarks, handedness=Handedness.RIGHT, confidence=0.9)
         assert hand.landmarks.shape == (21, 3)
         assert hand.handedness == Handedness.RIGHT
-        assert hand.confidence == 0.9
+        assert hand.confidence == pytest.approx(0.9)
 
     def test_invalid_shape_raises(self) -> None:
         with pytest.raises(AssertionError):
@@ -87,7 +87,7 @@ class TestFrameResult:
         result = FrameResult()
         assert len(result.hands) == 0
         assert len(result.gestures) == 0
-        assert result.inference_time_ms == 0.0
+        assert result.inference_time_ms == pytest.approx(0.0)
 
     def test_frame_with_hands(self, random_landmarks: HandLandmarks) -> None:
         result = FrameResult(
@@ -97,7 +97,7 @@ class TestFrameResult:
             inference_time_ms=5.0,
         )
         assert len(result.hands) == 1
-        assert result.inference_time_ms == 5.0
+        assert result.inference_time_ms == pytest.approx(5.0)
 
 
 class TestHandedness:
