@@ -178,6 +178,31 @@ function cross3d(
 // ---------------------------------------------------------------------------
 
 export class GestureEngine {
+  /**
+   * Whether the browser can give MediaPipe a WebGL context.
+   *
+   * Checked before initialization because MediaPipe's failure mode is an
+   * alert() per frame from inside its bundled code, which cannot be caught.
+   */
+  static isWebGLAvailable(): boolean {
+    if (typeof document === "undefined") return false;
+    try {
+      const canvas = document.createElement("canvas");
+      const gl =
+        canvas.getContext("webgl2") ||
+        canvas.getContext("webgl") ||
+        canvas.getContext("experimental-webgl");
+      if (!gl) return false;
+      // Release the probe context so it does not count against the browser's limit.
+      (gl as WebGLRenderingContext)
+        .getExtension("WEBGL_lose_context")
+        ?.loseContext();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private hands: any | null = null;
   private session: ort.InferenceSession | null = null;
   private sequenceBuffer: Float32Array[] = [];
@@ -278,6 +303,19 @@ export class GestureEngine {
     if (!Hands) {
       console.error("MediaPipe Hands library not found");
       return;
+    }
+
+    // MediaPipe needs WebGL and, when it cannot get a context, calls alert()
+    // from inside its own bundle on every frame we send it. That makes the page
+    // unusable behind hundreds of modal dialogs. Fail fast with something the
+    // UI can actually display instead.
+    if (!GestureEngine.isWebGLAvailable()) {
+      throw new Error(
+        "WebGL is unavailable, so hand tracking cannot run. Enable hardware " +
+        "acceleration in your browser settings (Chrome: Settings > System > " +
+        "\"Use graphics acceleration when available\"), then fully restart the " +
+        "browser. chrome://gpu shows why it is disabled."
+      );
     }
 
     this.hands = new Hands({
@@ -696,7 +734,25 @@ export class GestureEngine {
   dispose(): void {
     this.session?.release();
     this.session = null;
+
+    // MediaPipe Hands holds a WebGL context. Dropping the reference does not
+    // free it, and browsers cap concurrent WebGL contexts (~16 in Chrome), so
+    // leaking one per session ends in "Failed to create WebGL canvas context".
+    if (this.hands) {
+      try {
+        const closing = this.hands.close?.();
+        if (closing && typeof closing.catch === "function") {
+          closing.catch((err: unknown) =>
+            console.warn("GestureEngine: MediaPipe close failed", err)
+          );
+        }
+      } catch (err) {
+        console.warn("GestureEngine: MediaPipe close threw", err);
+      }
+    }
     this.hands = null;
+    this.lastMPResults = null;
+    this.currentDetectionPromise = null;
     this.sequenceBuffer = [];
     this.vBuffer = [];
     this.pBuffer = [];

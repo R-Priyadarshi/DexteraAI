@@ -106,6 +106,10 @@ export default function Home() {
                 await videoRef.current.play();
             }
 
+            // Booting again (or switching vocabulary) must not strand the old engine.
+            engineRef.current?.dispose();
+            engineRef.current = null;
+
             const engine = new GestureEngine();
             const bundle = MODEL_BUNDLES.find((b) => b.id === bundleId) ?? MODEL_BUNDLES[0];
             await engine.initialize(bundle.url);
@@ -148,6 +152,9 @@ export default function Home() {
             });
             videoRef.current.srcObject = null;
         }
+        // Release the engine's ONNX session and MediaPipe WebGL context.
+        // Nulling the ref alone leaks a WebGL context per boot.
+        engineRef.current?.dispose();
         engineRef.current = null;
         setIsRunning(false);
         setGesture(null);
