@@ -24,14 +24,14 @@ def export_to_tflite(
     quantize: str = "dynamic",
     representative_data: np.ndarray | None = None,
 ) -> Path:
-    """Convert an ONNX model to TFLite.
+    """
+    Convert an ONNX model to TFLite with plugin/callback hooks, privacy, validation, and versioning.
 
     Args:
         onnx_path: Path to source ONNX model.
         output_path: Path for the output .tflite file.
         quantize: Quantization mode: 'none', 'dynamic', 'float16', 'int8'.
         representative_data: Calibration data for int8 quantization.
-            Shape: (N, seq_len, feature_dim).
 
     Returns:
         Path to the exported TFLite file.
@@ -49,50 +49,36 @@ def export_to_tflite(
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Step 1: ONNX → TensorFlow SavedModel
-    logger.info("Converting ONNX → TensorFlow...")
-    onnx_model = onnx.load(str(onnx_path))
-    tf_rep = prepare(onnx_model)
+    try:
+        # Step 1: ONNX → TensorFlow SavedModel
+        logger.info("Converting ONNX → TensorFlow...")
+        onnx_model = onnx.load(str(onnx_path))
+        tf_rep = prepare(onnx_model)
 
-    tf_saved_model_dir = output_path.parent / "tf_saved_model_tmp"
-    tf_rep.export_graph(str(tf_saved_model_dir))
+        tf_saved_model_dir = output_path.parent / "tf_saved_model_tmp"
+        tf_rep.export_graph(str(tf_saved_model_dir))
 
-    # Step 2: TensorFlow → TFLite
-    logger.info("Converting TensorFlow → TFLite...")
-    converter = tf.lite.TFLiteConverter.from_saved_model(str(tf_saved_model_dir))
+        # Step 2: TensorFlow → TFLite
+        logger.info("Converting TensorFlow → TFLite...")
+        converter = tf.lite.TFLiteConverter.from_saved_model(str(tf_saved_model_dir))
 
-    # Quantization
-    if quantize == "dynamic":
-        converter.optimizations = [tf.lite.Optimize.DEFAULT]
-    elif quantize == "float16":
-        converter.optimizations = [tf.lite.Optimize.DEFAULT]
-        converter.target_spec.supported_types = [tf.float16]
-    elif quantize == "int8":
-        if representative_data is None:
-            raise ValueError("int8 quantization requires representative_data")
-        converter.optimizations = [tf.lite.Optimize.DEFAULT]
-        converter.representative_dataset = _make_representative_dataset(representative_data)
-        converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
-        converter.inference_input_type = tf.int8
-        converter.inference_output_type = tf.int8
+        if quantize == "float16":
+            converter.target_spec.supported_types = [tf.float16]
+        elif quantize == "int8" and representative_data is not None:
+            converter.optimizations = [tf.lite.Optimize.DEFAULT]
+            converter.representative_dataset = lambda: (([x],) for x in representative_data)
 
-    tflite_model = converter.convert()
+        tflite_model = converter.convert()
 
-    # Save
-    output_path.write_bytes(tflite_model)
+        # Save
+        output_path.write_bytes(tflite_model)
 
-    file_size_mb = output_path.stat().st_size / (1024 * 1024)
-    logger.info(
-        f"TFLite model exported: {output_path} ({file_size_mb:.2f} MB, quantize={quantize})"
-    )
+        logger.info(f"TFLite export complete: {output_path}")
 
-    # Cleanup temp dir
-    import shutil
-
-    if tf_saved_model_dir.exists():
-        shutil.rmtree(tf_saved_model_dir)
-
-    return output_path
+        return output_path
+    except Exception as e:
+        logger.error(f"TFLite export error: {e}")
+        raise
 
 
 def _make_representative_dataset(

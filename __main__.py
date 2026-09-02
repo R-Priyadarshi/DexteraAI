@@ -6,4 +6,8 @@ Usage: python dextera.py <command> [options]
 from dextera import main
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"[DexteraAI ERROR] {e}")
+        exit(1)

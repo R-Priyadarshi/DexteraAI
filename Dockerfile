@@ -47,6 +47,8 @@ COPY backend/ backend/
 COPY dextera.py .
 COPY __main__.py .
 COPY pyproject.toml .
+COPY scripts/healthcheck.sh /app/healthcheck.sh
+RUN chmod +x /app/healthcheck.sh
 COPY --from=web-builder /app/web/out /app/web/dist
 
 # Secure Environment

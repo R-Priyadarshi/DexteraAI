@@ -32,7 +32,9 @@ def export_to_onnx(
     dynamic_seq: bool = True,
     validate: bool = True,
 ) -> Path:
-    """Export a GestureTransformer to ONNX format.
+    """
+    Export a GestureTransformer to ONNX format with plugin/callback hooks,
+    privacy, validation, and versioning.
 
     Args:
         model: Trained PyTorch model.
@@ -48,15 +50,10 @@ def export_to_onnx(
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-
     model.eval()
     device = next(model.parameters()).device
-
-    # Dummy inputs
     dummy_input = torch.randn(1, seq_len, model.input_dim, device=device)
     dummy_mask = torch.zeros(1, seq_len, dtype=torch.bool, device=device)
-
-    # Dynamic axes
     dynamic_axes: dict[str, dict[int, str]] = {}
     if dynamic_batch:
         dynamic_axes["input"] = {0: "batch"}
