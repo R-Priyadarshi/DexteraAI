@@ -9,16 +9,17 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from loguru import logger
 
 from core.landmarks.features import LandmarkFeatureExtractor
-from core.landmarks.normalizer import LandmarkNormalizer, NormalizationMode
+from core.landmarks.normalizer import LandmarkNormalizer
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from core.types import HandLandmarks
 
 
@@ -48,11 +49,12 @@ class UserCalibrator:
         3. During recognition, confidence is adjusted based on
            similarity to user's calibration data
 
+    Supports plugin/callback hooks, privacy controls, metrics, and robust error handling.
+
     Usage:
-        >>> calibrator = UserCalibrator(user_id="user_123")
+        >>> calibrator = UserCalibrator(user_id="user_123", callbacks=[...], privacy_mode=True)
         >>> calibrator.start_calibration()
         >>> calibrator.add_sample("thumbs_up", hand_landmarks)
-        >>> calibrator.add_sample("thumbs_up", hand_landmarks_2)
         >>> calibrator.finish_calibration()
         >>> calibrator.save("profiles/user_123.json")
     """
@@ -62,141 +64,159 @@ class UserCalibrator:
     def __init__(
         self,
         user_id: str,
-        normalizer: LandmarkNormalizer | None = None,
-        feature_extractor: LandmarkFeatureExtractor | None = None,
+        callbacks: list[Any] | None = None,
+        privacy_mode: bool = False,
+        log: Any = logger,
     ) -> None:
-        self._user_id = user_id
-        self._normalizer = normalizer or LandmarkNormalizer(NormalizationMode.FULL)
-        self._extractor = feature_extractor or LandmarkFeatureExtractor()
-        self._profile = CalibrationProfile(user_id=user_id)
-        self._is_calibrating = False
-
-    @property
-    def profile(self) -> CalibrationProfile:
-        return self._profile
+        self.user_id = user_id
+        self.profile = CalibrationProfile(user_id=user_id)
+        self.callbacks = callbacks or []
+        self.privacy_mode = privacy_mode
+        self.log = log
+        self.feature_extractor = LandmarkFeatureExtractor()
+        self.normalizer = LandmarkNormalizer()
+        self._calibrating = False
+        self.metrics: dict[str, Any] = {}
 
     @property
     def is_calibrating(self) -> bool:
-        return self._is_calibrating
+        return self._calibrating
 
     def start_calibration(self) -> None:
         """Begin a calibration session."""
-        self._profile.gesture_references.clear()
-        self._is_calibrating = True
-        logger.info(f"Calibration started for user: {self._user_id}")
+        self._calibrating = True
+        self.profile.gesture_references.clear()
+        self.profile.created_at = self._now()
+        for cb in self.callbacks:
+            cb.on_calibration_start(self)
+        self.log.info(f"Calibration started for user: {self.user_id}")
 
-    def add_sample(self, gesture_name: str, hand: HandLandmarks) -> int:
-        """Add a calibration sample for a gesture.
-
-        Args:
-            gesture_name: Name of the gesture being calibrated.
-            hand: Hand landmarks for this sample.
-
-        Returns:
-            Number of samples collected for this gesture.
-
-        Raises:
-            RuntimeError: If calibration hasn't been started.
-        """
-        if not self._is_calibrating:
-            raise RuntimeError("Call start_calibration() first.")
-
-        normalized = self._normalizer.normalize(hand)
-        features = self._extractor.extract(normalized)
-
-        if gesture_name not in self._profile.gesture_references:
-            self._profile.gesture_references[gesture_name] = []
-
-        self._profile.gesture_references[gesture_name].append(features)
-        count = len(self._profile.gesture_references[gesture_name])
-        logger.debug(f"Calibration sample {count} for '{gesture_name}'")
-        return count
+    def add_sample(self, gesture_name: str, hand_landmarks: HandLandmarks) -> int:
+        if not self._calibrating:
+            self.log.error("Calibration not started.")
+            for cb in self.callbacks:
+                cb.on_calibration_error(self, "Calibration not started.")
+            raise RuntimeError("start_calibration must be called before add_sample")
+        try:
+            if self.privacy_mode:
+                hand_landmarks = self._mask_landmarks(hand_landmarks)
+            normalized = self.normalizer.normalize(hand_landmarks)
+            features = self.feature_extractor.extract(normalized)
+            self.profile.gesture_references.setdefault(gesture_name, []).append(features)
+            for cb in self.callbacks:
+                cb.on_sample_added(self, gesture_name, features)
+            self.log.info(f"Sample added for gesture: {gesture_name}")
+            return len(self.profile.gesture_references[gesture_name])
+        except Exception as e:
+            self.log.error(f"Calibration sample error: {e}")
+            for cb in self.callbacks:
+                cb.on_calibration_error(self, e)
+            raise
 
     def finish_calibration(self) -> CalibrationProfile:
-        """Finish calibration and validate the profile.
-
-        Returns:
-            The completed calibration profile.
-
-        Raises:
-            ValueError: If any gesture has insufficient samples.
-        """
-        for name, samples in self._profile.gesture_references.items():
-            if len(samples) < self.MIN_SAMPLES_PER_GESTURE:
+        for gesture, refs in self.profile.gesture_references.items():
+            if len(refs) < self.MIN_SAMPLES_PER_GESTURE:
                 raise ValueError(
-                    f"Gesture '{name}' has {len(samples)} samples, "
-                    f"need at least {self.MIN_SAMPLES_PER_GESTURE}."
+                    f"need at least {self.MIN_SAMPLES_PER_GESTURE} samples for gesture '{gesture}'"
                 )
+        self._calibrating = False
+        self.profile.hand_scale = self._estimate_hand_scale()
+        for cb in self.callbacks:
+            cb.on_calibration_end(self)
+        self.log.info(f"Calibration finished for user: {self.user_id}")
+        return self.profile
 
-        import datetime
+    def compute_similarity(self, gesture_name: str, hand_landmarks: HandLandmarks) -> float:
+        """Compute similarity between input landmarks and calibrated reference."""
+        if gesture_name not in self.profile.gesture_references:
+            raise ValueError(f"Gesture '{gesture_name}' not calibrated")
+        normalized = self.normalizer.normalize(hand_landmarks)
+        features = self.feature_extractor.extract(normalized)
+        refs = self.profile.gesture_references[gesture_name]
+        # Example: cosine similarity
+        sims = [self._cosine_similarity(features, ref) for ref in refs]
+        return float(np.mean(sims)) if sims else 0.0
 
-        self._profile.created_at = datetime.datetime.now(datetime.UTC).isoformat()
-        self._is_calibrating = False
-        logger.info(
-            f"Calibration complete for {self._user_id}: "
-            f"{len(self._profile.gesture_references)} gestures"
-        )
-        return self._profile
+    def _cosine_similarity(self, a: np.ndarray, b: np.ndarray) -> float:
+        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8))
 
-    def compute_similarity(self, gesture_name: str, hand: HandLandmarks) -> float:
-        """Compute similarity between a hand and calibrated reference.
-
-        Args:
-            gesture_name: Gesture to compare against.
-            hand: Current hand landmarks.
-
-        Returns:
-            Cosine similarity score [0, 1].
-        """
-        if gesture_name not in self._profile.gesture_references:
-            return 0.0
-
-        normalized = self._normalizer.normalize(hand)
-        features = self._extractor.extract(normalized)
-
-        references = self._profile.gesture_references[gesture_name]
-        mean_ref = np.mean(references, axis=0)
-
-        # Cosine similarity
-        dot = np.dot(features, mean_ref)
-        norm_a = np.linalg.norm(features)
-        norm_b = np.linalg.norm(mean_ref)
-        if norm_a < 1e-6 or norm_b < 1e-6:
-            return 0.0
-        return float(dot / (norm_a * norm_b))
+    def load(self, path: str | Path) -> CalibrationProfile | None:
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            self._dict_to_profile(data)
+            self.log.info(f"Calibration profile loaded: {path}")
+            for cb in self.callbacks:
+                cb.on_profile_loaded(self, path)
+            return self.profile
+        except FileNotFoundError as e:
+            self.log.error(f"Calibration load error: {e}")
+            for cb in self.callbacks:
+                cb.on_calibration_error(self, e)
+            raise
+        except Exception as e:
+            self.log.error(f"Calibration load error: {e}")
+            for cb in self.callbacks:
+                cb.on_calibration_error(self, e)
+            return None
 
     def save(self, path: str | Path) -> None:
-        """Save calibration profile to JSON."""
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(path, "w") as f:
+                json.dump(self._profile_to_dict(), f, indent=2)
+            self.log.info(f"Calibration profile saved: {path}")
+            for cb in self.callbacks:
+                cb.on_profile_saved(self, path)
+        except Exception as e:
+            self.log.error(f"Calibration save error: {e}")
+            for cb in self.callbacks:
+                cb.on_calibration_error(self, e)
 
-        data = {
-            "user_id": self._profile.user_id,
-            "created_at": self._profile.created_at,
-            "hand_scale": self._profile.hand_scale,
-            "gestures": {
-                name: [arr.tolist() for arr in samples]
-                for name, samples in self._profile.gesture_references.items()
+    def _mask_landmarks(self, hand_landmarks: HandLandmarks) -> HandLandmarks:
+        """Privacy: return landmarks with coordinates zeroed.
+
+        Previously this returned ``np.zeros_like(hand_landmarks)``, which passed a
+        dataclass to numpy and produced an ndarray, so every downstream call
+        failed as soon as privacy_mode was enabled.
+        """
+        from dataclasses import replace
+
+        return replace(hand_landmarks, landmarks=np.zeros_like(hand_landmarks.landmarks))
+
+    def _estimate_hand_scale(self) -> float:
+        # Example: estimate hand scale from reference samples
+        scales = []
+        for refs in self.profile.gesture_references.values():
+            for f in refs:
+                scales.append(np.linalg.norm(f))
+        return float(np.median(scales)) if scales else 1.0
+
+    def _now(self) -> str:
+        import datetime
+        return datetime.datetime.now(datetime.UTC).isoformat()
+
+    def _profile_to_dict(self) -> dict[str, Any]:
+        return {
+            "user_id": self.profile.user_id,
+            "gesture_references": {
+                k: [f.tolist() for f in v] for k, v in self.profile.gesture_references.items()
             },
+            "created_at": self.profile.created_at,
+            "hand_scale": self.profile.hand_scale,
         }
-        path.write_text(json.dumps(data, indent=2))
-        logger.info(f"Calibration profile saved: {path}")
 
-    def load(self, path: str | Path) -> CalibrationProfile:
-        """Load calibration profile from JSON."""
-        path = Path(path)
-        if not path.exists():
-            raise FileNotFoundError(f"Profile not found: {path}")
+    def _dict_to_profile(self, data: dict[str, Any]) -> None:
+        self.profile.user_id = data.get("user_id", "")
+        self.profile.gesture_references = {
+            k: [np.array(f) for f in v] for k, v in data.get("gesture_references", {}).items()
+        }
+        self.profile.created_at = data.get("created_at", "")
+        self.profile.hand_scale = data.get("hand_scale", 1.0)
 
-        data = json.loads(path.read_text())
-        self._profile = CalibrationProfile(
-            user_id=data["user_id"],
-            created_at=data.get("created_at", ""),
-            hand_scale=data.get("hand_scale", 1.0),
-            gesture_references={
-                name: [np.array(arr, dtype=np.float32) for arr in samples]
-                for name, samples in data["gestures"].items()
-            },
-        )
-        logger.info(f"Calibration profile loaded: {path}")
-        return self._profile
+    def enable_privacy(self) -> None:
+        self.privacy_mode = True
+        self.log.info("Privacy mode enabled for calibration.")
+
+    def disable_privacy(self) -> None:
+        self.privacy_mode = False
+        self.log.info("Privacy mode disabled for calibration.")

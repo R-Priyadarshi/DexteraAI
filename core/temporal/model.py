@@ -132,6 +132,10 @@ class GestureTransformer(nn.Module):
             nn.Sigmoid(),
         )
 
+        # Quantization stubs
+        self.quant = torch.ao.quantization.QuantStub()
+        self.dequant = torch.ao.quantization.DeQuantStub()
+
         self._init_weights()
 
     def _init_weights(self) -> None:
@@ -159,6 +163,7 @@ class GestureTransformer(nn.Module):
         batch_size = x.size(0)
 
         # Project input to d_model
+        x = self.quant(x)
         x = self.input_proj(x)  # (B, S, d_model)
 
         # Prepend CLS token
@@ -174,10 +179,12 @@ class GestureTransformer(nn.Module):
         x = self.pos_encoder(x)
 
         # Transformer encoding
+        # NOTE: Using src_key_padding_mask for optimized attention
         x = self.transformer_encoder(x, src_key_padding_mask=mask)
 
-        # Extract CLS token output
+        # Extract CLS token output and dequantize
         cls_output = x[:, 0]  # (B, d_model)
+        cls_output = self.dequant(cls_output)
 
         # Classification
         logits = self.classifier(cls_output)  # (B, num_classes)
