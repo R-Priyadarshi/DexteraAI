@@ -11,6 +11,7 @@
 import * as ort from "onnxruntime-web";
 import { gestureStore } from "./gesture-store";
 import { type GesturePhase, type SegmenterConfig } from "./gesture-segmenter";
+import { normalizeLandmarks } from "./landmark-normalizer";
 import { buildPrototype, matchPrototypes, type Prototype } from "./few-shot";
 import { HandTrack, type Handedness, type HandResult } from "./hand-track";
 
@@ -63,6 +64,17 @@ export interface GestureResult {
   heldMs: number;
   /** Unique id of the current segment, for de-duplicating repeated holds. */
   segmentId: number;
+  /**
+   * Milliseconds spent in MediaPipe landmark detection for this frame.
+   *
+   * Split out from `inferenceTimeMs` because the two have completely different
+   * remedies: detection cost is a function of model complexity and GPU
+   * availability, classification cost is the ONNX session. Reporting only the
+   * total makes a slow frame impossible to attribute.
+   */
+  detectMs: number;
+  /** Milliseconds spent in ONNX classification for this frame. */
+  classifyMs: number;
   /**
    * Every hand detected this frame, each with independent recognition state.
    * The top-level fields above mirror `hands[0]`, the primary hand, so existing
@@ -133,6 +145,26 @@ export const CUSTOM_GESTURE_ID = 999;
  */
 const DETECTION_TIMEOUT_MS = 2000;
 
+/**
+ * Confidence required to accept a new hand detection.
+ *
+ * Deliberately low, and measured rather than assumed: raising this to 0.5
+ * stopped MediaPipe detecting a hand at all on a test clip that 0.3 handled
+ * fine. A missed hand costs the user a repeated gesture, while a weak
+ * detection is filtered downstream by the model's own calibrated rejection
+ * threshold — so the asymmetry favours accepting.
+ */
+const MIN_DETECTION_CONFIDENCE = 0.3;
+
+/**
+ * Confidence required to keep tracking an existing hand.
+ *
+ * Kept low because falling below it makes MediaPipe re-run full palm
+ * detection, which is the expensive path — tolerating a weak track is cheaper
+ * than re-detecting every few frames.
+ */
+const MIN_TRACKING_CONFIDENCE = 0.2;
+
 /** Minimum prototype-match confidence for a taught gesture to be reported. */
 const CUSTOM_MATCH_THRESHOLD = 0.8;
 
@@ -184,6 +216,14 @@ export interface BundleCalibration {
 // Feature Extraction (mirrors core/landmarks/features.py)
 // ---------------------------------------------------------------------------
 
+/**
+ * Build the 86-dim feature vector the model consumes.
+ *
+ * Input must already be normalized — see `normalizeLandmarks`. Passing raw
+ * MediaPipe output produces a vector in a different space from the training
+ * data and the model's output becomes meaningless, which is exactly the bug
+ * this signature comment exists to prevent recurring.
+ */
 function extractFeatures(landmarks: Landmark[]): Float32Array {
   const features = new Float32Array(FEATURE_DIM);
   let idx = 0;
@@ -218,8 +258,13 @@ function extractFeatures(landmarks: Landmark[]): Float32Array {
   }
 
   // 4. Finger curl ratios (5)
+  // [tip, pip, mcp] per finger, matching `_finger_curl_ratios` in
+  // core/landmarks/features.py. The thumb's middle and base indices are 2 and
+  // 3 in that order — the reverse of the anatomical reading — and having them
+  // the other way round here silently produced a different thumb curl from the
+  // one the model was trained on.
   const fingerDefs: [number, number, number][] = [
-    [4, 3, 2],   // thumb
+    [4, 2, 3],   // thumb
     [8, 6, 5],   // index
     [12, 10, 9], // middle
     [16, 14, 13],// ring
@@ -318,6 +363,18 @@ export class GestureEngine {
 
   /** Hands MediaPipe is configured to detect. */
   private maxHands = 1;
+
+  /**
+   * MediaPipe Hands model complexity: 0 (lite) or 1 (full).
+   *
+   * Defaults to lite. Full costs roughly two to three times as much per frame
+   * for a modest gain in landmark precision, and the trade is bad here: the
+   * classifier needs a 30-frame window, so at the ~3fps full complexity
+   * produces on a machine without GPU acceleration the buffer takes ten
+   * seconds to fill and every gesture is classified from stale frames. Lite at
+   * 15fps is far more accurate in practice than full at 3fps.
+   */
+  private modelComplexity: 0 | 1 = 0;
   private labels: string[] = [...DEFAULT_GESTURE_LABELS];
   private sequenceLength: number = DEFAULT_SEQUENCE_LENGTH;
 
@@ -353,9 +410,9 @@ export class GestureEngine {
     if (this.hands) {
       this.hands.setOptions({
         maxNumHands: count,
-        modelComplexity: 1,
-        minDetectionConfidence: 0.3,
-        minTrackingConfidence: 0.2,
+        modelComplexity: this.modelComplexity,
+        minDetectionConfidence: MIN_DETECTION_CONFIDENCE,
+        minTrackingConfidence: MIN_TRACKING_CONFIDENCE,
       });
     }
     // State for a hand that is no longer tracked would otherwise persist and
@@ -365,6 +422,26 @@ export class GestureEngine {
 
   getMaxHands(): number {
     return this.maxHands;
+  }
+
+  /**
+   * Trade landmark precision against frame rate.
+   *
+   * Applied live; MediaPipe accepts new options without a restart.
+   */
+  setModelComplexity(complexity: 0 | 1): void {
+    if (complexity === this.modelComplexity) return;
+    this.modelComplexity = complexity;
+    this.hands?.setOptions({
+      maxNumHands: this.maxHands,
+      modelComplexity: complexity,
+      minDetectionConfidence: MIN_DETECTION_CONFIDENCE,
+      minTrackingConfidence: MIN_TRACKING_CONFIDENCE,
+    });
+  }
+
+  getModelComplexity(): 0 | 1 {
+    return this.modelComplexity;
   }
 
   /** Track for a hand, created on first sight. */
@@ -528,9 +605,9 @@ export class GestureEngine {
 
     this.hands.setOptions({
       maxNumHands: this.maxHands,
-      modelComplexity: 1,
-      minDetectionConfidence: 0.3, // High sensitivity
-      minTrackingConfidence: 0.2,  // High sensitivity
+      modelComplexity: this.modelComplexity,
+      minDetectionConfidence: MIN_DETECTION_CONFIDENCE,
+      minTrackingConfidence: MIN_TRACKING_CONFIDENCE,
     });
 
     this.hands.onResults((results: any) => {
@@ -587,6 +664,9 @@ export class GestureEngine {
       if (timer !== undefined) window.clearTimeout(timer);
     }
 
+    // Detection is everything up to this point.
+    const detectMs = performance.now() - t0;
+
     const mp = this.lastMPResults;
     const detected: Landmark[][] = mp?.multiHandLandmarks ?? [];
 
@@ -596,6 +676,7 @@ export class GestureEngine {
     }
 
     const now = performance.now();
+    const classifyStart = now;
     const results: HandResult[] = [];
     const seen = new Set<Handedness>();
 
@@ -613,7 +694,13 @@ export class GestureEngine {
       seen.add(handedness);
       const track = this.track(handedness);
 
-      track.push(extractFeatures(landmarks), this.sequenceLength);
+      // Normalize before extracting: the model was trained on wrist-centred,
+      // unit-scaled, rotation-aligned landmarks, and raw MediaPipe output is
+      // none of those.
+      track.push(
+        extractFeatures(normalizeLandmarks(landmarks)),
+        this.sequenceLength
+      );
 
       let gestureId = -1;
       let confidence = 0;
@@ -695,6 +782,8 @@ export class GestureEngine {
       segmentId: primary.segmentId,
       hands: results,
       combo: this.buildCombo(results),
+      detectMs,
+      classifyMs: performance.now() - classifyStart,
     };
   }
 
@@ -741,6 +830,8 @@ export class GestureEngine {
       segmentId: 0,
       hands: [],
       combo: null,
+      detectMs: elapsedMs,
+      classifyMs: 0,
     };
   }
 
@@ -827,7 +918,9 @@ export class GestureEngine {
     const prototypes = this.prototypes();
     if (prototypes.length === 0) return null;
 
-    const query = this.weightFeatures(extractFeatures(currentLandmarks));
+    const query = this.weightFeatures(
+      extractFeatures(normalizeLandmarks(currentLandmarks))
+    );
     const match = matchPrototypes(query, prototypes);
 
     return match && match.confidence > CUSTOM_MATCH_THRESHOLD
@@ -854,7 +947,9 @@ export class GestureEngine {
         buildPrototype(
           g.id,
           g.name,
-          g.samples.map((sample) => this.weightFeatures(extractFeatures(sample)))
+          g.samples.map((sample) =>
+            this.weightFeatures(extractFeatures(normalizeLandmarks(sample)))
+          )
         )
       )
       .filter((p): p is Prototype => p !== null);
@@ -922,3 +1017,12 @@ export class GestureEngine {
     this.isInitialized = false;
   }
 }
+
+/**
+ * Test-only export of the feature builder.
+ *
+ * Exposed so `feature-parity.test.ts` can check it against fixtures produced by
+ * the Python training pipeline. Nothing in the app should call this; use the
+ * engine.
+ */
+export const extractFeaturesForTest = extractFeatures;

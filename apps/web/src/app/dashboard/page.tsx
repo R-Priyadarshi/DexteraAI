@@ -54,6 +54,22 @@ export default function Console() {
     const [twoHanded, setTwoHanded] = useState(false);
 
     /**
+     * MediaPipe model complexity. Lite by default — see `gesture-engine.ts`.
+     * Exposed so a fast machine can opt into the precise model and a slow one
+     * can confirm that is where its frame time is going.
+     */
+    const [preciseModel, setPreciseModel] = useState(false);
+    useEffect(() => {
+        engineRef.current?.setModelComplexity(preciseModel ? 1 : 0);
+    }, [preciseModel]);
+
+    /** Rolling detect/classify split, for attributing a slow frame. */
+    const [timing, setTiming] = useState<{ detect: number; classify: number }>({
+        detect: 0,
+        classify: 0,
+    });
+
+    /**
      * Hands-free pointing. Off by default: while it is on, the hand drives a
      * cursor that clicks whatever it rests on, which is not what someone
      * exploring the console expects to happen.
@@ -361,6 +377,10 @@ export default function Console() {
                                     : next;
                             });
                             setGesture(result);
+                            setTiming({
+                                detect: result.detectMs,
+                                classify: result.classifyMs,
+                            });
                             setCalibration(calibrator.getMetrics());
                             lastStateUpdateTimeRef.current = now;
                         }
@@ -596,6 +616,19 @@ export default function Console() {
                                     {twoHanded ? "2 hands" : "1 hand"}
                                 </button>
                                 <button
+                                    onClick={() => setPreciseModel((v) => !v)}
+                                    className="border px-3 py-1.5 label transition-colors"
+                                    style={{
+                                        borderRadius: 2,
+                                        borderColor: preciseModel ? "var(--signal)" : "var(--rule-strong)",
+                                        color: preciseModel ? "var(--signal)" : "var(--ink-3)",
+                                        background: preciseModel ? "var(--signal-4)" : "transparent",
+                                    }}
+                                    title="Full-complexity landmarks. Two to three times slower per frame."
+                                >
+                                    {preciseModel ? "Precise" : "Fast"}
+                                </button>
+                                <button
                                     onClick={() => setPointerMode((v) => !v)}
                                     className="border px-3 py-1.5 label transition-colors"
                                     style={{
@@ -737,6 +770,32 @@ export default function Console() {
                                 <span className="label">ceiling 60 ms</span>
                             </div>
                             <Sparkline values={latencyHistory} max={60} height={28} />
+
+                            {/* Where the frame actually went. Detection and
+                                classification have entirely different remedies,
+                                so a single total cannot be acted on. */}
+                            <div className="mt-3 flex items-baseline gap-6">
+                                <div className="flex items-baseline gap-2">
+                                    <span className="label">Landmarks</span>
+                                    <span
+                                        className="readout text-xs"
+                                        style={{
+                                            color:
+                                                timing.detect > 60
+                                                    ? "var(--alert)"
+                                                    : "var(--signal)",
+                                        }}
+                                    >
+                                        {timing.detect.toFixed(1)} ms
+                                    </span>
+                                </div>
+                                <div className="flex items-baseline gap-2">
+                                    <span className="label">Classify</span>
+                                    <span className="readout text-xs text-[var(--ink-2)]">
+                                        {timing.classify.toFixed(1)} ms
+                                    </span>
+                                </div>
+                            </div>
                         </div>
                     </section>
 
