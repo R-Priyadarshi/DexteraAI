@@ -138,6 +138,16 @@ Stated plainly, because the alternative is a promise the code does not keep:
   standard corpus, is research-licensed.
 - **Continuous sign-language translation** is out of scope. Recognizing isolated
   signs is a different and much easier problem than translating fluent signing.
+- **Several recognised gestures are offensive in parts of the world.** The
+  vocabulary comes from HaGRID and is not culturally neutral: `ok` is obscene in
+  Brazil, Turkey and Greece and has been appropriated as a hate symbol
+  elsewhere; `peace_inverted` is a serious insult across the UK, Ireland,
+  Australia and New Zealand; `rock` implies infidelity in Italy, Spain and
+  Portugal; `like` is offensive in parts of the Middle East and West Africa. Two
+  of the eight default bindings (`ok`, `like`) are affected. Recognising a
+  gesture is not the same as requiring it, and every binding is remappable at
+  runtime — but anyone shipping this to a specific region should choose the
+  defaults for that region rather than inherit these.
 - **Linux is the only verified platform.** Everything here was developed and is
   tested on Ubuntu, and CI runs on `ubuntu-latest` for Python 3.11 and 3.12. The
   matrix previously also claimed macOS and Windows; those cells failed, and
@@ -325,4 +335,11 @@ passed in isolation while calling each other with mismatched APIs.
 
 ---
 
-Built by [R-Priyadarshi](https://github.com/R-Priyadarshi). MIT licensed.
+Built by [R-Priyadarshi](https://github.com/R-Priyadarshi).
+
+**Code is MIT.** The trained weights are licensed separately in
+[models/LICENSE](models/LICENSE), because they derive from third-party training
+data with its own terms: `models/hagrid` is CC BY-SA 4.0 (what HaGRID's licence
+requires), and `models/asl_alphabet` is unlicensed pending a re-source. See
+[docs/DATASET_LICENSES.md](docs/DATASET_LICENSES.md) before redistributing
+either.

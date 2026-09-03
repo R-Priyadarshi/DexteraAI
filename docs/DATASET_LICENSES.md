@@ -49,26 +49,30 @@ Two conditions do attach:
 2. **ShareAlike** (Section 3(b)) — Adapted Material must be licensed under "a
    license with the same License Elements […] or a BY-SA-compatible license."
 
-### The open question, stated precisely
+### The share-alike condition, and how it is met
 
-Condition 2 collides with this repository's MIT licence **if trained weights are
-Adapted Material**. MIT imposes no share-alike, so it is not BY-SA-compatible.
+Condition 2 collides with an MIT-only repository: MIT imposes no share-alike, so
+it is not BY-SA-compatible. The project owner's decision to **open source
+DexteraAI** (2026-09-04) makes this straightforward to satisfy rather than
+something to argue about.
 
-Whether a model trained on a dataset is a derivative work of that dataset is
-genuinely unsettled law, not a question with a known answer this file is
-withholding. Two facts bear on it here, both in the project's favour and neither
-dispositive:
+The repository is therefore licensed in two parts:
 
-- **Only a subset was used.** Roughly 65,802 samples were extracted from a
-  507,050-row corpus — about 13%. Section 4(b) attaches Adapted-Material status
-  to a database incorporating "all or substantially all" of the content.
-- **No source imagery survives.** The pipeline persists 21 landmark coordinates
-  per hand and discards the images. Nothing in `models/` or `data/sequences/`
-  reconstructs a HaGRID photograph.
+| What | License | Where |
+|---|---|---|
+| All source code | MIT | `/LICENSE` |
+| `models/hagrid` weights | CC BY-SA 4.0 | `models/LICENSE` |
 
-That is an argument, not a clearance. **Have counsel settle it before charging
-for anything built on `models/hagrid`.** If the answer comes back unfavourable,
-the fix is bounded: retrain Track 1 on data with clear terms —
+CC BY-SA 4.0 carries the same License Elements the HaGRID licence names, so
+distributing the weights under it discharges Section 3(b) whether or not trained
+weights are legally Adapted Material. That question — genuinely unsettled, and
+not one this file is pretending to answer — no longer needs answering for
+Track 1, because the obligation is met either way.
+
+Adopters should know this is a real constraint on them: anyone redistributing an
+adaptation of `models/hagrid` inherits share-alike. It is not viral into your
+application code, which stays MIT; it attaches to the weights. Retraining on
+data without a share-alike obligation removes it, and the fallback is bounded —
 `extract_landmarks.py --image-dir` takes any folder-per-class image set, so no
 model or app code changes.
 
@@ -80,13 +84,29 @@ are granted — permissive intent cannot be inferred from public availability, a
 a re-uploader cannot grant rights they never held. Unlike HaGRID there is no
 upstream document to fall back on and no identified rights holder to ask.
 
-This makes `models/asl_alphabet` the **weaker** of the two positions
-commercially, despite HaGRID being the one that carries visible conditions. A
-licence with obligations is a stronger footing than no licence at all.
+This makes `models/asl_alphabet` the **weaker** of the two positions, despite
+HaGRID being the one that carries visible conditions. A licence with obligations
+is a stronger footing than no licence at all. Open sourcing does not help here
+and mildly hurts: public worldwide distribution of weights derived from data
+nobody granted rights to is more exposure, not less.
 
-Fingerspelling is also the cheapest track to re-source: 26 static handshapes,
-8,638 samples, no motion. It can be recorded first-hand in an afternoon, or
-taken from a CC0/CC BY set, and retrained with one command.
+`models/LICENSE` therefore offers no licence for this bundle, because none can
+honestly be offered.
+
+#### Identified replacements, both CC BY 4.0
+
+CC BY 4.0 permits commercial use and requires attribution only — no share-alike —
+so retraining on either makes this bundle MIT-clean and removes the whole
+problem. Checked 2026-09-04.
+
+| Candidate | Contents | Why it fits | Note |
+|---|---|---|---|
+| **ASL-HG** ([Mendeley `j4y5w2c8w9`](https://data.mendeley.com/datasets/j4y5w2c8w9/1)) | 36,000 high-resolution JPGs, 36 classes (A–Z **and 0–9**), folder-per-class | Structure `extract_landmarks.py --image-dir` already reads. Adds digits, widening the vocabulary rather than just replacing it. Provenance is documented: 10 volunteers, Dhaka, May–June 2025 | 10 subjects is a narrow pool; expect weaker generalisation across hands than the sample count suggests. The current dataset's subject diversity is simply unknown, so this is a known limit replacing an unknown one |
+| **ASL Alphabet** ([Mendeley `jdyksv2jhh`](https://data.mendeley.com/datasets/jdyksv2jhh/1)) | Train/Test folders, one per letter | Same folder-per-class shape; backed by a peer-reviewed paper (Cabana, IntelliSys 2025, DOI 10.1007/978-3-032-00071-2_15) | Image count and resolution not stated on the landing page; confirm before committing to it |
+
+Sign Language MNIST is **not** a candidate despite being CC0: 28x28 grayscale is
+far below what MediaPipe needs to find 21 hand landmarks, and it omits J and Z.
+A permissive licence on data this pipeline cannot read is no use.
 
 ## Attribution
 

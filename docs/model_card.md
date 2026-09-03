@@ -11,7 +11,7 @@
 | Input | `(batch, seq_len, 86)` landmark features + `(batch, seq_len)` padding mask |
 | Output | `logits (batch, num_classes)` and an auxiliary `confidence (batch,)` |
 | Framework | PyTorch, exported to ONNX (opset 17) |
-| License | MIT (code). Training data licensing is separate: see [DATASET_LICENSES.md](DATASET_LICENSES.md) |
+| License | Code MIT. Weights licensed separately in [models/LICENSE](../models/LICENSE): `hagrid` is CC BY-SA 4.0, `asl_alphabet` is unlicensed pending re-source. See [DATASET_LICENSES.md](DATASET_LICENSES.md) |
 
 A smaller `StaticGestureClassifier` MLP (59,419 params, 0.23 MB) is available in
 `core/temporal/static_model.py` as a single-frame baseline.

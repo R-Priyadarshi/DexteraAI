@@ -1,0 +1,57 @@
+Licensing of the trained model weights in this directory
+========================================================
+
+The source code of DexteraAI is MIT licensed (see /LICENSE at the repository
+root). The weights here are covered separately, because they are derived from
+third-party training data whose terms differ from the code's. The two bundles do
+not stand in the same place, so they are stated separately.
+
+
+models/hagrid/  —  CC BY-SA 4.0
+-------------------------------
+
+Licensed under Creative Commons Attribution-ShareAlike 4.0 International.
+    https://creativecommons.org/licenses/by-sa/4.0/
+
+You may use these weights for any purpose, including commercially. If you
+distribute them or a work adapted from them, credit as below and license your
+adaptation under CC BY-SA 4.0 or a compatible license.
+
+This is not the project's preference; it is compliance. The weights are trained
+on hand landmarks extracted from the HaGRID dataset, whose license requires that
+adapted material carry "a license with the same License Elements […] or a
+BY-SA-compatible license" (Section 3(b)(1)). CC BY-SA 4.0 is that license. Any
+future bundle trained on data without a share-alike obligation can ship MIT with
+the code.
+
+    Trained on hand landmarks extracted from the HaGRID dataset by Alexander
+    Kapitanov, Karina Kvanchiani, Alexander Nagaev, Roman Kraynov and Andrei
+    Makhliarchuk (SberDevices).
+      Dataset: https://github.com/hukenovs/hagrid
+      License: https://github.com/hukenovs/hagrid/blob/master/license/en_us.pdf
+      Paper:   https://arxiv.org/abs/2206.08219
+
+    Changes made: no images are redistributed. A subset was read once to extract
+    MediaPipe hand landmark coordinates, which were normalized into an
+    86-dimensional feature vector and used as training input.
+
+The dataset is provided by its licensors without warranties (Section 5 of that
+license), and the same disclaimer carries to these weights.
+
+
+models/asl_alphabet/  —  rights unresolved, do not rely on
+---------------------------------------------------------
+
+No license is offered for these weights, because none can honestly be offered.
+
+They are trained on `Marxulia/asl_sign_languages_alphabets_v03` (HuggingFace),
+which declares no license and carries an empty dataset card. Where no license is
+granted, the copyright default is that no rights pass — and a re-uploader cannot
+grant rights they did not hold. This project therefore has nothing to sublicense
+to you.
+
+These weights are present so the fingerspelling path is demonstrable, and they
+are scheduled for replacement rather than relicensing. Do not redistribute them
+or build a product on them. Two CC BY 4.0 replacements are identified in
+docs/DATASET_LICENSES.md; retraining on either makes this bundle MIT-clean and
+this section goes away.
