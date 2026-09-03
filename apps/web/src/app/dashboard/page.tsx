@@ -8,6 +8,7 @@ import { PluginEngine } from "@/lib/plugin-engine";
 import { PresentationPlugin } from "@/lib/plugins/presentation";
 import { BiometricGuard } from "@/components/BiometricGuard";
 import { GestureStudio } from "@/components/GestureStudio";
+import { MotionStudio } from "@/components/MotionStudio";
 import { MacroComposer } from "@/components/MacroComposer";
 import { macroEngine } from "@/lib/macro-engine";
 import { voiceEngine, type VoiceIntent } from "@/lib/voice-engine";
@@ -90,6 +91,23 @@ export default function Console() {
     const [recentActions, setRecentActions] = useState<{ action: GestureAction; timestamp: number }[]>([]);
     const [isLocked, setIsLocked] = useState(true);
     const [isStudioOpen, setIsStudioOpen] = useState(false);
+    const [isMotionOpen, setIsMotionOpen] = useState(false);
+
+    /**
+     * Full-rate frame tap.
+     *
+     * `gesture` state is throttled to 10Hz, which is fine for readouts but
+     * useless for recording motion: a 30-frame clip would span three seconds
+     * and sample a fraction of the movement. Consumers that need every frame
+     * subscribe here instead.
+     */
+    const frameSubscriberRef = useRef<((r: GestureResult) => void) | null>(null);
+    const subscribeToFrames = useCallback(
+        (fn: ((r: GestureResult) => void) | null) => {
+            frameSubscriberRef.current = fn;
+        },
+        []
+    );
     const [isMacroOpen, setIsMacroOpen] = useState(false);
     const [isMapperOpen, setIsMapperOpen] = useState(false);
     const [isCalibrating, setIsCalibrating] = useState(false);
@@ -280,6 +298,8 @@ export default function Console() {
                         drawLandmarks(canvas, result);
                         calibrator.record(result.landmarks);
 
+                        frameSubscriberRef.current?.(result);
+
                         // Pointer runs every frame, not on the throttled state
                         // tick: a cursor updated ten times a second is unusable.
                         if (pointerModeRef.current) {
@@ -431,6 +451,13 @@ export default function Console() {
                 <ActionMapper vocabulary={vocabulary} onClose={() => setIsMapperOpen(false)} />
             )}
             {isMacroOpen && <MacroComposer gesture={gesture} onClose={() => setIsMacroOpen(false)} />}
+            {isMotionOpen && (
+                <MotionStudio
+                    subscribe={subscribeToFrames}
+                    frameCount={engineRef.current?.getSequenceLength() ?? 30}
+                    onClose={() => setIsMotionOpen(false)}
+                />
+            )}
             {isCalibrating && (
                 <CalibrationWizard
                     landmarks={gesture?.landmarks || null}
@@ -794,6 +821,14 @@ export default function Console() {
                             </button>
                             <button onClick={() => setIsMacroOpen(true)} className="btn">
                                 Macros
+                            </button>
+                            <button
+                                onClick={() =>
+                                    isRunning ? setIsMotionOpen(true) : setError("Start the camera first.")
+                                }
+                                className="btn"
+                            >
+                                Motion
                             </button>
                             <button
                                 onClick={() =>
