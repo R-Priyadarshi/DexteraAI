@@ -10,6 +10,10 @@ const nextConfig = {
     };
     return config;
   },
+  // Applies to `next dev` and `next start` only. Under `output: "export"`
+  // there is no server, so Next drops these — the static host has to send
+  // them. `public/_headers` covers Netlify and Cloudflare Pages; see
+  // docs/DEPLOYMENT-HEADERS.md for nginx, Vercel and GitHub Pages.
   headers: async () => [
     {
       source: "/(.*)",

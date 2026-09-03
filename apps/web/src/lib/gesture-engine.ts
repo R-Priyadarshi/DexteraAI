@@ -428,8 +428,28 @@ export class GestureEngine {
     try {
       // Configure ORT with detailed paths for better reliability in workers
       ort.env.wasm.wasmPaths = "/onnx/";
-      ort.env.wasm.numThreads = Math.min(4, navigator.hardwareConcurrency || 4);
+
+      // Threaded WASM needs SharedArrayBuffer, which needs the page to be
+      // cross-origin isolated (COOP + COEP). Those headers are set in
+      // `next.config.mjs` for the dev server, but `output: "export"` drops
+      // them — a static host has to send them itself, and many do not. Asking
+      // for threads that cannot be created just produces a runtime warning and
+      // a silent fallback, so the request is matched to what the page can
+      // actually support.
+      const isolated =
+        typeof crossOriginIsolated !== "undefined" && crossOriginIsolated;
+      ort.env.wasm.numThreads = isolated
+        ? Math.min(4, navigator.hardwareConcurrency || 4)
+        : 1;
       ort.env.wasm.proxy = false;
+
+      if (!isolated) {
+        console.info(
+          "GestureEngine: page is not cross-origin isolated, so ONNX runs " +
+            "single-threaded. Serve with Cross-Origin-Opener-Policy: same-origin " +
+            "and Cross-Origin-Embedder-Policy: require-corp for multithreaded WASM."
+        );
+      }
 
       console.log("GestureEngine: Initializing ORT with wasmPaths:", ort.env.wasm.wasmPaths);
 
