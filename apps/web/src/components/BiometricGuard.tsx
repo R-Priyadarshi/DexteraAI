@@ -5,36 +5,81 @@ import { type GestureResult } from "@/lib/gesture-engine";
 
 interface BiometricGuardProps {
     gesture: GestureResult | null;
+    /**
+     * Gesture labels forming the unlock sequence, in order.
+     *
+     * Passed in rather than hardcoded. This previously held class *indices*
+     * against the built-in fallback vocabulary, so under the shipped HaGRID
+     * bundle it displayed "PEACE_SIGN / CLOSED_FIST / THUMBS_UP" while actually
+     * requiring ids 5, 2 and 3 — which are `mute`, `fist` and `four` there. The
+     * guard asked for one thing and accepted another, and following its own
+     * instructions never unlocked it.
+     */
+    sequence: string[];
     onUnlocked: () => void;
 }
 
-const SIGNATURE_SEQUENCE = [5, 2, 3]; // Full Industrial Sequence: Peace, Fist, Thumbs Up
-const CONFIDENCE_THRESHOLD = 0.6; 
-const HOLD_TIME_MS = 250; // Ultra-fast multi-sign lock
+const CONFIDENCE_THRESHOLD = 0.6;
 
-export function BiometricGuard({ gesture, onUnlocked }: BiometricGuardProps) {
+/**
+ * Gestures preferred for the unlock signature, most-preferred first.
+ *
+ * Chosen to be visually distinct from one another, so a hand mid-transition
+ * between two of them is unlikely to satisfy the next step by accident.
+ */
+export const PREFERRED_SIGNATURE = [
+    "peace",
+    "fist",
+    "like",
+    "palm",
+    "ok",
+    "one",
+    "stop",
+];
+
+export const SIGNATURE_LENGTH = 3;
+
+/**
+ * Pick an unlock signature from the vocabulary that is actually loaded.
+ *
+ * Only labels the bundle contains are used. A signature naming a gesture the
+ * active model can never produce would make the guard impossible to open — the
+ * exact failure the previous index-keyed version had, where it displayed
+ * "PEACE_SIGN / CLOSED_FIST / THUMBS_UP" while requiring `mute`, `fist` and
+ * `four`.
+ */
+export function signatureFor(vocabulary: string[]): string[] {
+    const available = PREFERRED_SIGNATURE.filter((g) => vocabulary.includes(g));
+    // Bundles sharing no labels with the preferred list — the ASL alphabet, for
+    // one — fall back to the head of their own vocabulary.
+    const chosen = available.length >= SIGNATURE_LENGTH ? available : vocabulary;
+    return chosen.slice(0, SIGNATURE_LENGTH);
+}
+
+/**
+ * How long each pose must be held.
+ *
+ * Long enough to be deliberate, so a hand passing through a pose on its way
+ * somewhere else does not advance the sequence.
+ */
+const HOLD_TIME_MS = 600;
+
+export function BiometricGuard({ gesture, sequence, onUnlocked }: BiometricGuardProps) {
     const [currentIndex, setCurrentIndex] = useState(0);
     const [holdProgress, setHoldProgress] = useState(0);
     const [isVerifying, setIsVerifying] = useState(false);
-    const lastGestureRef = useRef<number | null>(null);
     const holdStartRef = useRef<number | null>(null);
 
     useEffect(() => {
-        if (!gesture || gesture.gestureId === -1) {
-            lastGestureRef.current = null;
+        if (!gesture || gesture.rejected || gesture.gestureId === -1) {
             holdStartRef.current = null;
             setHoldProgress(0);
             return;
         }
 
-        const targetGesture = SIGNATURE_SEQUENCE[currentIndex];
+        const target = sequence[currentIndex];
 
-        // Debug telemetry for Handshake
-        if (gesture.confidence > 0.5) {
-            console.log(`[Handshake] Received: ${gesture.gestureName} (${gesture.confidence.toFixed(2)}) | Target: ${SIGNATURE_SEQUENCE[currentIndex]}`);
-        }
-
-        if (gesture.gestureId === targetGesture && gesture.confidence >= CONFIDENCE_THRESHOLD) {
+        if (gesture.gestureName === target && gesture.confidence >= CONFIDENCE_THRESHOLD) {
             if (holdStartRef.current === null) {
                 holdStartRef.current = Date.now();
             }
@@ -44,7 +89,7 @@ export function BiometricGuard({ gesture, onUnlocked }: BiometricGuardProps) {
             setHoldProgress(progress);
 
             if (elapsed >= HOLD_TIME_MS) {
-                if (currentIndex === SIGNATURE_SEQUENCE.length - 1) {
+                if (currentIndex === sequence.length - 1) {
                     setIsVerifying(true);
                     setTimeout(() => onUnlocked(), 1000);
                 } else {
@@ -57,16 +102,7 @@ export function BiometricGuard({ gesture, onUnlocked }: BiometricGuardProps) {
             holdStartRef.current = null;
             setHoldProgress(0);
         }
-    }, [gesture, currentIndex, onUnlocked]);
-
-    const getGestureName = (id: number) => {
-        switch (id) {
-            case 5: return "PEACE_SIGN";
-            case 2: return "CLOSED_FIST";
-            case 3: return "THUMBS_UP";
-            default: return "UNKNOWN";
-        }
-    };
+    }, [gesture, currentIndex, sequence, onUnlocked]);
 
     return (
         <div className="absolute inset-0 z-[100] flex items-center justify-center bg-transparent animate-in fade-in duration-1000">
@@ -94,8 +130,15 @@ export function BiometricGuard({ gesture, onUnlocked }: BiometricGuardProps) {
                 </div>
 
                 {/* Signature Progress HUD */}
-                <div className="grid grid-cols-3 gap-8 w-full">
-                    {SIGNATURE_SEQUENCE.map((id, i) => (
+                <div
+                    className="grid gap-8 w-full"
+                    style={{
+                        // Driven by the sequence length rather than fixed at
+                        // three, so a shorter or longer signature still lays out.
+                        gridTemplateColumns: `repeat(${sequence.length}, minmax(0, 1fr))`,
+                    }}
+                >
+                    {sequence.map((label, i) => (
                         <div key={i} className="flex flex-col items-center gap-4">
                             <div className={`relative h-1 w-full rounded-full overflow-hidden bg-white/5`}>
                                 <div
@@ -108,7 +151,7 @@ export function BiometricGuard({ gesture, onUnlocked }: BiometricGuardProps) {
                                     Step_0{i + 1}
                                 </span>
                                 <span className={`text-[10px] font-bold tracking-tighter uppercase transition-colors duration-500 ${i <= currentIndex ? "text-[var(--signal)]" : "text-white/5"}`}>
-                                    {getGestureName(id)}
+                                    {label.replace(/_/g, " ")}
                                 </span>
                             </div>
                         </div>

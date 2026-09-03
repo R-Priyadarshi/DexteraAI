@@ -6,7 +6,7 @@ import { GestureEngine, type GestureResult } from "@/lib/gesture-engine";
 import { type GestureAction } from "@/lib/action-registry";
 import { PluginEngine } from "@/lib/plugin-engine";
 import { PresentationPlugin } from "@/lib/plugins/presentation";
-import { BiometricGuard } from "@/components/BiometricGuard";
+import { BiometricGuard, signatureFor } from "@/components/BiometricGuard";
 import { GestureStudio } from "@/components/GestureStudio";
 import { MotionStudio } from "@/components/MotionStudio";
 import { DesktopBridge } from "@/components/DesktopBridge";
@@ -22,6 +22,7 @@ import { calibrator, type CalibrationMetrics } from "@/lib/calibrator";
 import { SpatialDeck } from "@/components/SpatialDeck";
 import { ActionMapper } from "@/components/ActionMapper";
 import { actionRegistry } from "@/lib/action-registry";
+import { coverGeometry, projectLandmark } from "@/lib/overlay-geometry";
 import { PointerEngine, clickAt, type PointerState } from "@/lib/pointer-engine";
 import { PointerOverlay } from "@/components/PointerOverlay";
 import { CalibrationWizard } from "@/components/CalibrationWizard";
@@ -197,14 +198,26 @@ export default function Console() {
     const lastStateUpdateTimeRef = useRef(0);
     const loopRef = useRef<number | null>(null);
 
-    const drawLandmarks = useCallback((canvas: HTMLCanvasElement, result: GestureResult) => {
+    const drawLandmarks = useCallback((
+        canvas: HTMLCanvasElement,
+        video: HTMLVideoElement,
+        result: GestureResult
+    ) => {
         const ctx = canvas.getContext("2d");
         if (!ctx) return;
 
+        // Back the canvas at device resolution. Sizing it in CSS pixels leaves
+        // the skeleton visibly soft on any HiDPI display, where one CSS pixel
+        // is two or three physical ones. Every coordinate below is then in
+        // device pixels, which is consistent because the mapping derives from
+        // `canvas.width`/`canvas.height` rather than from the CSS box.
         const rect = canvas.getBoundingClientRect();
-        if (canvas.width !== rect.width || canvas.height !== rect.height) {
-            canvas.width = rect.width;
-            canvas.height = rect.height;
+        const dpr = window.devicePixelRatio || 1;
+        const targetW = Math.round(rect.width * dpr);
+        const targetH = Math.round(rect.height * dpr);
+        if (canvas.width !== targetW || canvas.height !== targetH) {
+            canvas.width = targetW;
+            canvas.height = targetH;
         }
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -224,12 +237,16 @@ export default function Console() {
             [0, 17], [17, 18], [18, 19], [19, 20], [5, 9], [9, 13], [13, 17],
         ];
 
-        // The video is mirrored in CSS but the canvas is not, so landmark x is
-        // flipped here to land the skeleton over the hand as displayed.
-        const px = (p: { x: number; y: number }) => ({
-            x: (1.0 - p.x) * canvas.width,
-            y: p.y * canvas.height,
-        });
+        // Landmarks are normalised over the source frame, while the video is
+        // displayed with `object-fit: cover`. See `overlay-geometry.ts` — the
+        // mapping is non-obvious and unit-tested there rather than inline.
+        const geometry = coverGeometry(
+            video.videoWidth,
+            video.videoHeight,
+            canvas.width,
+            canvas.height
+        );
+        const px = (p: { x: number; y: number }) => projectLandmark(p, geometry);
 
         const tips = new Set([4, 8, 12, 16, 20]);
 
@@ -242,7 +259,9 @@ export default function Console() {
             const colour = hand.rejected ? "#605e58" : "#ffb627";
 
             ctx.strokeStyle = colour;
-            ctx.lineWidth = 2;
+            // Line weights and dot radii are authored in CSS pixels, so they
+            // scale with the backing store or they would shrink on HiDPI.
+            ctx.lineWidth = 2 * dpr;
             ctx.lineCap = "round";
             ctx.beginPath();
             for (const [i, j] of CONNECTIONS) {
@@ -259,7 +278,7 @@ export default function Console() {
             landmarks.forEach((p, i) => {
                 const c = px(p);
                 ctx.beginPath();
-                ctx.arc(c.x, c.y, i === 0 ? 5 : tips.has(i) ? 4 : 2.5, 0, Math.PI * 2);
+                ctx.arc(c.x, c.y, (i === 0 ? 5 : tips.has(i) ? 4 : 2.5) * dpr, 0, Math.PI * 2);
                 if (i === 0 || tips.has(i)) {
                     ctx.fillStyle = colour;
                     ctx.fill();
@@ -267,7 +286,7 @@ export default function Console() {
                     ctx.fillStyle = "#0a0a0b";
                     ctx.fill();
                     ctx.strokeStyle = colour;
-                    ctx.lineWidth = 1.2;
+                    ctx.lineWidth = 1.2 * dpr;
                     ctx.stroke();
                 }
             });
@@ -298,7 +317,7 @@ export default function Console() {
                     const ctx = canvas.getContext("2d");
 
                     if (result) {
-                        drawLandmarks(canvas, result);
+                        drawLandmarks(canvas, video, result);
                         calibrator.record(result.landmarks);
 
                         frameSubscriberRef.current?.(result);
@@ -681,7 +700,11 @@ export default function Console() {
 
                             {isRunning && isLocked && (
                                 <div className="absolute inset-0 z-20 bg-[var(--field)]/40">
-                                    <BiometricGuard gesture={gesture} onUnlocked={() => setIsLocked(false)} />
+                                    <BiometricGuard
+                                        gesture={gesture}
+                                        sequence={signatureFor(vocabulary)}
+                                        onUnlocked={() => setIsLocked(false)}
+                                    />
                                 </div>
                             )}
 
