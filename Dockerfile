@@ -29,10 +29,19 @@ LABEL description="Industrial-grade gesture intelligence platform"
 
 WORKDIR /app
 
-# System dependencies for OpenCV and MediaPipe
+# System dependencies for OpenCV and MediaPipe.
+#
+# libegl1 and libgles2 are not optional: `libmediapipe.so` links libEGL.so.1
+# and libGLESv2.so.2 directly, so on a headless image without them every
+# detector construction dies with
+#   OSError: libEGL.so.1: cannot open shared object file
+# even though nothing here renders anything. MediaPipe 0.10.x did not need
+# them; 1.0.x does, and `mediapipe>=0.10.14` resolves to 1.0.x today.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1-mesa-glx \
     libglib2.0-0 \
+    libegl1 \
+    libgles2 \
     curl \
     && rm -rf /var/lib/apt/lists/*
 

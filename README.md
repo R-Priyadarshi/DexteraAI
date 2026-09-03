@@ -122,6 +122,17 @@ Stated plainly, because the alternative is a promise the code does not keep:
 
 ## Quick start
 
+On a headless Linux box — a server, a container, a CI runner — install the EGL
+libraries first. `libmediapipe.so` links `libEGL.so.1` and `libGLESv2.so.2`
+directly, so without them every detector fails at construction with
+`OSError: libEGL.so.1: cannot open shared object file`, which reads like a bug
+in this code and is a missing system package. A desktop already has them.
+MediaPipe 0.10.x did not need this; 1.0.x does.
+
+```bash
+sudo apt-get install -y libegl1 libgles2   # headless Linux only
+```
+
 ```bash
 python3.11 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev,api,training]"
