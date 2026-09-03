@@ -203,7 +203,7 @@ def iter_parquet(
     from datasets import load_dataset
 
     if label_names is None:
-        # nosec B615 — reads a local file through the parquet loader; there is
+        # Suppressed below: reads a local file through the parquet loader; there is
         # no hub download here and so nothing to pin.
         ds_probe = load_dataset(  # nosec B615
             "parquet", data_files=str(parquet_paths[0]), split="train", streaming=True
@@ -221,7 +221,7 @@ def iter_parquet(
         from datasets import Image as HFImage
 
         for shard in parquet_paths:
-            # nosec B615 — local file, as above.
+            # Suppressed below: local file, as above.
             ds = load_dataset(  # nosec B615
                 "parquet", data_files=str(shard), split="train", streaming=True
             )

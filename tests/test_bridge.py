@@ -12,7 +12,19 @@ import stat
 import pytest
 
 from bridge import actions
-from bridge.server import Bridge, load_or_create_token
+from bridge.server import HAS_POSIX_MODES, Bridge, load_or_create_token
+
+# Removing these is what makes a session headless on Linux and macOS; on
+# Windows there is no equivalent, and none is needed.
+_DISPLAY_VARS = frozenset({"DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_TYPE"})
+
+# `os.chmod` on Windows toggles only the read-only flag, so a file's mode
+# reads back as 0o666 no matter how it was created. These tests assert the
+# owner-only guarantee itself, which that platform cannot make.
+requires_posix_modes = pytest.mark.skipif(
+    not HAS_POSIX_MODES,
+    reason="POSIX file modes are not enforced on this platform",
+)
 
 
 class TestImportSafety:
@@ -27,6 +39,12 @@ class TestImportSafety:
         import subprocess
         import sys
 
+        # Inherit the environment and remove only the display variables.
+        # Scrubbing it down to PATH also strips what the interpreter needs to
+        # start on some platforms, which would fail this test for a reason
+        # that has nothing to do with what it is testing.
+        env = {k: v for k, v in os.environ.items() if k not in _DISPLAY_VARS}
+
         result = subprocess.run(
             [
                 sys.executable,
@@ -37,10 +55,12 @@ class TestImportSafety:
             ],
             capture_output=True,
             text=True,
-            env={"PATH": os.environ.get("PATH", "")},  # no DISPLAY
+            env=env,
         )
         assert result.returncode == 0, result.stderr
-        assert "12" in result.stdout
+        # Compare against the registry rather than a literal, so adding an
+        # action does not fail an import test for the wrong reason.
+        assert result.stdout.split()[0] == str(len(actions.ACTIONS))
         assert "False" in result.stdout
 
     def test_availability_is_reported_not_raised(self) -> None:
@@ -86,6 +106,7 @@ class TestActionRegistry:
 
 
 class TestToken:
+    @requires_posix_modes
     def test_token_file_is_owner_only(self, tmp_path) -> None:
         path = tmp_path / "token"
         token = load_or_create_token(path)
@@ -98,6 +119,7 @@ class TestToken:
         path = tmp_path / "token"
         assert load_or_create_token(path) == load_or_create_token(path)
 
+    @requires_posix_modes
     def test_world_readable_token_is_rejected_not_repaired(self, tmp_path) -> None:
         # A token that was world-readable must be assumed already read.
         # Silently tightening the mode would keep using a secret that isn't one.

@@ -399,7 +399,7 @@ class GesturePipeline:
         except Exception:
             # Legacy checkpoints embed a config dataclass; trust only local files.
             logger.warning(f"Falling back to unsafe load for legacy checkpoint: {path}")
-            # nosec B614 — weights_only=True is attempted first; this fallback
+            # The suppression below is deliberate: weights_only=True is tried
             # exists only for checkpoints this project produced itself, which
             # embed a config dataclass. Never point it at a downloaded file.
             ckpt = torch.load(  # nosec B614

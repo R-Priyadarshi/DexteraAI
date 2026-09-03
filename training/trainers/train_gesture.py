@@ -499,7 +499,7 @@ class GestureTrainer:
             ckpt = torch.load(str(path), map_location=self._device, weights_only=True)
         except Exception:
             logger.warning(f"Falling back to unsafe load for legacy checkpoint: {path}")
-            # nosec B614 — see above; the safe path is tried first and this is
+            # Suppressed below, as above: the safe path is tried first and this is
             # reached only for this project's own older checkpoints.
             ckpt = torch.load(  # nosec B614
                 str(path), map_location=self._device, weights_only=False

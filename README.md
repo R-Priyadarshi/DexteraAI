@@ -3,7 +3,7 @@
 > Real-time hand gesture recognition that runs entirely on the user's device.
 > No images leave the machine. No cloud inference. No accounts.
 
-[![CI](https://github.com/R-Priyadarshi/DexteraAI/actions/workflows/ultra_ci.yml/badge.svg)](https://github.com/R-Priyadarshi/DexteraAI/actions)
+[![CI](https://github.com/R-Priyadarshi/DexteraAI/actions/workflows/ci.yml/badge.svg)](https://github.com/R-Priyadarshi/DexteraAI/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ---
@@ -107,6 +107,16 @@ Stated plainly, because the alternative is a promise the code does not keep:
   standard corpus, is research-licensed.
 - **Continuous sign-language translation** is out of scope. Recognizing isolated
   signs is a different and much easier problem than translating fluent signing.
+- **Linux is the only verified platform.** Everything here was developed and is
+  tested on Ubuntu, and CI runs on `ubuntu-latest` for Python 3.11 and 3.12. The
+  matrix previously also claimed macOS and Windows; those cells failed, and
+  rather than assert support that has never held, the claim was withdrawn. The
+  desktop bridge in particular cannot work on Windows as written — it relies on
+  POSIX file modes to keep its auth token owner-only, and `os.chmod` on Windows
+  toggles only a read-only flag — and it is already X11-only on Linux, so
+  Wayland sessions need `XDG_SESSION_TYPE=x11`. The web app itself is a static
+  site and runs in any modern browser on any OS; it is the Python toolchain and
+  the bridge whose portability is unproven.
 
 ---
 
@@ -164,7 +174,12 @@ so measure on yours before quoting any of them.
 
 The ONNX figures below were re-measured after fixing an inverted padding mask in
 the benchmark and eval paths: both marked every frame as padding, so the encoder
-attended to nothing and the old numbers timed a degenerate case. **Browser
+attended to nothing and the old numbers timed a degenerate case. The two CPU rows
+were re-measured for the same reason: the PyTorch row previously read `~0.1 ms`,
+which had the classifier beating ONNX Runtime on the same architecture by 7x —
+backwards, and wrong by an order of magnitude. `tests/test_benchmarks.py` now
+measures this path on every CI run and asserts a budget against it, so a figure
+here and the code can no longer drift apart unnoticed. **Browser
 latency is not listed, because it has not been measured on real hardware** —
 figures from a headless software rasteriser would be meaningless, and the WebGPU
 path is unavailable there by construction.
@@ -172,8 +187,8 @@ path is unavailable there by construction.
 | Stage | Cost | Notes |
 |---|---|---|
 | MediaPipe hand detection | ~47 ms p50, ~84 ms p95 | CPU, 720p frame. Dominates the pipeline. |
-| Normalize + feature extraction | ~0.7 ms | CPU |
-| Transformer classification (PyTorch) | ~0.1 ms | CPU, 30x86 window |
+| Normalize + feature extraction | 0.16 ms p50, 0.18 ms p95 | CPU, one hand |
+| Transformer classification (PyTorch) | 1.20 ms p50, 1.47 ms p95 | CPU, 30x86 window, 4 threads |
 | Transformer classification (ONNX Runtime) | 0.74 ms p50, 1.11 ms p95 | CPU, includes session overhead |
 | Model size | 2.1 MB fp32 | ~551k parameters |
 

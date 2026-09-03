@@ -273,7 +273,7 @@ class MediaPipeHandDetector:
     def __del__(self) -> None:
         # Bare try/except, not contextlib.suppress: during interpreter shutdown
         # module globals (including contextlib) may already be None.
-        # nosec B110 — a destructor cannot meaningfully handle a failure and
+        # Suppressed below: a destructor cannot meaningfully handle a failure and
         # must not raise during interpreter shutdown, when the exception would
         # be printed and ignored anyway.
         try:  # noqa: SIM105 - contextlib may be None during interpreter shutdown

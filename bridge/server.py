@@ -67,6 +67,14 @@ DEFAULT_ORIGINS = (
 
 TOKEN_PATH = Path("~/.cache/dextera/bridge-token").expanduser()
 
+# Windows has no POSIX mode bits. `os.chmod` there toggles only the read-only
+# flag, and `stat()` reports 0o666 for any writable file — so an owner-only
+# check would reject a token this module had itself just created, and the
+# bridge could never start. Restricting a file to its owner on Windows is an
+# ACL question this does not attempt to answer; the check is skipped and
+# `serve()` says so, rather than implying a protection that is not there.
+HAS_POSIX_MODES = os.name == "posix"
+
 # Ceiling on actions per second. The segmenter already emits at most a few
 # events a second, so anything near this bound is a malfunctioning or hostile
 # client, and injecting input at machine speed would make the desktop unusable.
@@ -80,12 +88,16 @@ def load_or_create_token(path: Path = TOKEN_PATH) -> str:
     looser permissions is rejected rather than tightened: if it was group- or
     world-readable, it must be assumed already read, and silently fixing the
     mode would keep using a token that is no longer secret.
+
+    On Windows that guarantee does not hold — see `HAS_POSIX_MODES` — so the
+    mode check is skipped there rather than failing closed on a file this
+    function just wrote.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
 
     if path.exists():
         mode = stat.S_IMODE(path.stat().st_mode)
-        if mode & (stat.S_IRWXG | stat.S_IRWXO):
+        if HAS_POSIX_MODES and mode & (stat.S_IRWXG | stat.S_IRWXO):
             raise PermissionError(
                 f"{path} is readable by other users (mode {mode:o}). "
                 "Delete it so a fresh token can be generated:\n"
@@ -153,9 +165,7 @@ class Bridge:
             return
 
         logger.info(f"Client connected: {peer}")
-        await connection.send(
-            json.dumps({"type": "ready", "actions": actions.describe()})
-        )
+        await connection.send(json.dumps({"type": "ready", "actions": actions.describe()}))
 
         try:
             async for message in connection:
@@ -178,22 +188,16 @@ class Bridge:
 
         if self._rate_limited():
             logger.warning("Rate limit exceeded; dropping action")
-            await connection.send(
-                json.dumps({"type": "error", "reason": "rate_limited"})
-            )
+            await connection.send(json.dumps({"type": "error", "reason": "rate_limited"}))
             return
 
         ok = actions.run(action_id)
         if ok:
             logger.info(f"→ {action_id}")
-        await connection.send(
-            json.dumps({"type": "result", "action": action_id, "ok": ok})
-        )
+        await connection.send(json.dumps({"type": "result", "action": action_id, "ok": ok}))
 
 
-async def _health(
-    connection: ServerConnection, request: Request
-) -> Response | None:
+async def _health(connection: ServerConnection, request: Request) -> Response | None:
     """Answer a plain GET on /health without upgrading to a WebSocket.
 
     Lets the console detect whether the bridge is running without opening a
@@ -211,6 +215,12 @@ async def main_async(port: int, origins: set[str]) -> None:
     logger.info(f"Bridge listening on ws://127.0.0.1:{port}")
     logger.info(f"Allowed origins: {', '.join(sorted(origins))}")
     logger.info(f"Token file: {TOKEN_PATH}")
+    if not HAS_POSIX_MODES:
+        logger.warning(
+            "This platform has no POSIX file modes, so the token file's "
+            "permissions are not enforced. Any process running as you can read "
+            "it and drive the bridge."
+        )
     logger.info(f"Token: {token}")
     logger.info("Paste the token into the console's Desktop panel to connect.")
 

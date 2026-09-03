@@ -37,6 +37,10 @@ dev = [
     "hypothesis>=6.100.0",
     "ruff>=0.4.0",
     "mypy>=1.10.0",
+    # CI's lint job runs bandit. It used to be listed in the workflow but
+    # declared nowhere, so the step failed on a missing command rather than on
+    # any finding — the scan had never actually run.
+    "bandit>=1.7.0",
     "pre-commit>=3.7.0",
     # The bridge's own dependencies, so CI actually exercises it. Both are
     # small and pure Python. `pynput` cannot inject input on a headless runner,
@@ -51,9 +55,6 @@ bridge = [
     # input is not something a default install should be able to do.
     "pynput>=1.7.6",
     "websockets>=12.0",
-    # CI's lint job runs bandit; without it declared here the step failed on a
-    # missing command rather than on any finding.
-    "bandit>=1.7.0",
 ]
 training = [
     "datasets>=2.19.0",
@@ -128,6 +129,10 @@ module = [
     "onnx_tf.*",
     "torch.amp",
     "onnx_tf.backend",
+    # The bridge's input backend. No stubs are published, and it is imported
+    # lazily inside a function, so mypy sees it only at that call site.
+    "pynput",
+    "pynput.*",
 ]
 ignore_missing_imports = true
 disable_error_code = ["import-untyped", "attr-defined"]
