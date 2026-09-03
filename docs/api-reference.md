@@ -179,11 +179,21 @@ See `/apps/web`, `/apps/mobile`, `/apps/desktop` for starter templates.
 
 ---
 
-## Accessibility & Internationalization
+## Accessibility
 
-- Motor disability support, sign language, customizable gestures
-- Multi-language UI, locale-aware onboarding
-- Global privacy compliance (GDPR, CCPA, etc.)
+- **Hands-free pointer**: a fingertip cursor with dwell-to-click, for use
+  without a mouse. See `pointer-engine.ts`.
+- **ASL fingerspelling**: a 26-letter model, with the holistic feature path
+  built for word-level signs (no trained model yet).
+- **Teach-your-own gestures**: few-shot prototypes for anything the shipped
+  vocabulary does not cover.
+
+Not present, though earlier drafts of this document claimed otherwise: there is
+no multi-language UI and no locale-aware onboarding — `core/accessibility.py`
+held a translation table covering two of the eight languages it advertised, and
+has been deleted rather than left to imply a feature. No formal GDPR or CCPA
+compliance work has been done either; what is true is narrower and stronger —
+inference runs on-device and no image data leaves the machine.
 
 ---
 

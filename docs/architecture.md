@@ -68,18 +68,22 @@
 
 ## Developer Experience
 
-- Modular, extensible architecture (plugin/callbacks everywhere)
-- CLI, API, SDK, and plugin marketplace
-- Automated onboarding, documentation, and integration
-- MLflow, DVC, GitHub Actions, benchmarks for MLOps
+- Modular architecture: plugins are TypeScript objects registered at startup,
+  and the trainer takes callbacks for epoch and training hooks
+- A CLI (`dextera.py`) and an optional local API server
+- MLflow, DVC, GitHub Actions and latency benchmarks for MLOps
 
 ---
 
 ## Performance & Scale
 
-- Real-time inference (<20ms per frame)
-- Distributed training, robust experiment tracking
-- Global deployment, accessibility, internationalization
+Measured figures live in the README and are re-measured by
+`tests/test_benchmarks.py` on every CI run. In short: classification is
+sub-millisecond and hand detection dominates, at roughly 47 ms p50 on CPU — so
+the per-frame budget is set by MediaPipe, not by this project's model.
+
+Training runs on a single device. There is no distributed training, no SDK and
+no plugin marketplace; earlier drafts of this document listed all three.
 
 ## Data Flow
 

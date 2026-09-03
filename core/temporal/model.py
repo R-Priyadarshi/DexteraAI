@@ -68,7 +68,6 @@ class GestureTransformer(nn.Module):
 
     Output:
         logits: (batch, num_classes) — gesture classification logits.
-        attention_weights: Optional attention maps for explainability.
     """
 
     def __init__(
@@ -154,17 +153,15 @@ class GestureTransformer(nn.Module):
         self,
         x: torch.Tensor,
         mask: torch.Tensor | None = None,
-        return_attention: bool = False,
     ) -> dict[str, torch.Tensor]:
         """Forward pass.
 
         Args:
             x: (batch, seq_len, input_dim) landmark feature sequences.
             mask: (batch, seq_len) boolean mask where True = padded/ignored.
-            return_attention: If True, include attention weights in output.
 
         Returns:
-            Dict with keys: 'logits', 'confidence', and optionally 'attention'.
+            Dict with keys: 'logits' and 'confidence'.
         """
         batch_size = x.size(0)
 

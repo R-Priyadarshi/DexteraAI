@@ -20,7 +20,6 @@ dependencies = [
     # inside a major, but it stops the next one arriving without a decision.
     "mediapipe>=0.10.14,<2",
     "torch>=2.3.0",
-    "torchvision>=0.18.0",
     "onnx>=1.16.0",
     "onnxruntime>=1.18.0",
     # `torch.onnx.export` routes through the dynamo exporter by default on
@@ -32,7 +31,6 @@ dependencies = [
     "onnxscript>=0.1.0",
     "numpy>=1.26.0",
     "opencv-python-headless>=4.10.0",
-    "scipy>=1.13.0",
     "scikit-learn>=1.5.0",
     "pydantic>=2.7.0",
     "loguru>=0.7.0",
@@ -85,7 +83,6 @@ training = [
     "optuna>=3.6.0",
     "dvc>=3.50.0",
     "tensorboard>=2.16.0",
-    "albumentations>=1.4.0",
 ]
 api = [
     "fastapi>=0.111.0",
@@ -100,12 +97,10 @@ api = [
     "starlette>=0.37.0",
     "uvicorn[standard]>=0.29.0",
     "pydantic-settings>=2.3.0",
-    "redis>=5.0.0",
-    "asyncpg>=0.29.0",
 ]
 tflite = [
     "tensorflow>=2.16.0",
-    "ai-edge-litert>=1.0.0",
+    # NOTE: also needs `onnx-tf`, deliberately unlisted — see below.
     # `training/export/to_tflite.py` also needs `onnx-tf`, which is not listed
     # here on purpose: it is unmaintained and does not install cleanly against
     # current TensorFlow, so pinning it would break this whole extra. The
