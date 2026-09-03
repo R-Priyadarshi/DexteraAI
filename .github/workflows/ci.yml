@@ -85,10 +85,13 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
 
+      # `[api]` too: tests/test_api.py boots the real FastAPI app, and without
+      # the extra its import is a collection error, which aborts the entire
+      # run rather than skipping one module.
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install -e ".[dev,api]"
 
       - name: Fetch MediaPipe bundles
         run: |

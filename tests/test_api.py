@@ -12,10 +12,20 @@ from __future__ import annotations
 import cv2
 import numpy as np
 import pytest
-from fastapi.testclient import TestClient
 
-from backend.apps.api.main import app
-from tests.conftest import requires_mediapipe_bundle
+# FastAPI lives in the optional [api] extra, so a `pip install -e ".[dev]"`
+# does not have it. Importing it unguarded made collection of this module a
+# hard error that aborted the whole run — pytest exits 2 on a collection error,
+# so 137 passing tests were reported as a failure. Skip instead, and let CI
+# install the extra so these actually run rather than silently vanish.
+fastapi_testclient = pytest.importorskip(
+    "fastapi.testclient",
+    reason='FastAPI is not installed — run: pip install -e ".[api]"',
+)
+TestClient = fastapi_testclient.TestClient
+
+from backend.apps.api.main import app  # noqa: E402  (must follow the skip above)
+from tests.conftest import requires_mediapipe_bundle  # noqa: E402
 
 
 @pytest.fixture(scope="module")

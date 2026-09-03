@@ -18,6 +18,7 @@ say so.
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -28,6 +29,7 @@ from core.landmarks.normalizer import LandmarkNormalizer, NormalizationMode
 from core.types import Handedness, HandLandmarks
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 # One frame at 30fps. Every budget below is a fraction of this, because
@@ -51,6 +53,19 @@ def _hand(seed: int = 0) -> HandLandmarks:
 def _mean_ms(benchmark: Any) -> float:
     """Mean round time in milliseconds, from pytest-benchmark's own stats."""
     return float(benchmark.stats["mean"]) * 1000.0
+
+
+def _time_ms(fn: Callable[[], Any], rounds: int = 200) -> float:
+    """Median wall-clock cost of `fn`, for ratios against a benchmarked call."""
+    for _ in range(20):  # warm up
+        fn()
+    samples = []
+    for _ in range(rounds):
+        start = time.perf_counter()
+        fn()
+        samples.append((time.perf_counter() - start) * 1000.0)
+    samples.sort()
+    return samples[len(samples) // 2]
 
 
 @pytest.mark.benchmark(group="landmarks")
@@ -95,19 +110,24 @@ def test_feature_extraction_fits_the_frame_budget(benchmark) -> None:
 def test_sequence_extraction_is_linear_in_frames(benchmark) -> None:
     """A full 30-frame window, as the temporal path consumes it.
 
-    Guards the shape of the cost, not just its size: 30 frames must cost about
-    30 times one frame. A regression to quadratic here would still look fast on
-    a 30-frame window and fall over on the 90-frame sign-language window.
+    This one guards the *shape* of the cost rather than its size. A regression
+    to quadratic would still look fast on a 30-frame window and fall over on
+    the 90-frame sign-language window, so the assertion is a ratio against the
+    per-frame cost measured in this same process — which makes it independent
+    of how fast the machine underneath happens to be. A wall-clock budget here
+    would just be measuring the CI runner.
     """
     extractor = LandmarkFeatureExtractor()
     hands = [_hand(seed) for seed in range(SEQUENCE_LEN)]
 
+    single = _time_ms(lambda: extractor.extract_sequence(hands[:1]))
     sequence = benchmark(extractor.extract_sequence, hands)
 
     assert sequence.shape == (SEQUENCE_LEN, FEATURE_DIM)
-    # Generous: 30 frames inside a single frame's budget still leaves the
-    # detector the other 97% of its time.
-    assert _mean_ms(benchmark) < FRAME_BUDGET_MS
+    per_frame = _mean_ms(benchmark) / SEQUENCE_LEN
+    # Linear would be 1.0. Allow 3x for per-call overhead amortising the other
+    # way on a single frame; quadratic on a 30-frame window would be ~30x.
+    assert per_frame / single < 3.0, f"{per_frame:.4f} ms/frame vs {single:.4f} ms for one"
 
 
 @pytest.mark.benchmark(group="inference")
@@ -152,22 +172,19 @@ def test_onnx_inference_is_the_fast_path(benchmark, tmp_path: Path) -> None:
     torch = pytest.importorskip("torch")
     ort = pytest.importorskip("onnxruntime")
     from core.temporal.model import GestureTransformer
+    from training.export.to_onnx import export_to_onnx
 
     model = GestureTransformer(input_dim=FEATURE_DIM, num_classes=18, max_seq_len=SEQUENCE_LEN)
     model.eval()
 
-    onnx_path = tmp_path / "bench.onnx"
+    # Deliberately the product's own exporter rather than a call to
+    # `torch.onnx.export` written for this test. If a torch release changes the
+    # export path, this fails where the shipping code is, not in a test-local
+    # copy that had drifted from it.
+    onnx_path = export_to_onnx(model, tmp_path / "bench.onnx", seq_len=SEQUENCE_LEN, validate=False)
+
     dummy_features = torch.randn(1, SEQUENCE_LEN, FEATURE_DIM)
     dummy_mask = torch.zeros(1, SEQUENCE_LEN, dtype=torch.bool)
-    torch.onnx.export(
-        model,
-        (dummy_features, dummy_mask),
-        str(onnx_path),
-        input_names=["input", "mask"],
-        output_names=["logits", "confidence"],
-        dynamic_axes={"input": {0: "batch", 1: "seq_len"}, "mask": {0: "batch", 1: "seq_len"}},
-        opset_version=17,
-    )
 
     options = ort.SessionOptions()
     options.intra_op_num_threads = 1  # measure the work, not the runner's cores
