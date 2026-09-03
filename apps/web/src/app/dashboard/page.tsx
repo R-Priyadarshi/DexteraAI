@@ -131,8 +131,13 @@ export default function Console() {
     useEffect(() => { voiceIntentRef.current = voiceIntent; }, [voiceIntent]);
 
     const startCamera = useCallback(async () => {
+        // Held outside the try so the catch can release it. `engine.initialize`
+        // now throws deliberately when WebGL is unavailable, and without this
+        // the camera stayed on — recording light and all — after a failure the
+        // user was told about but could not undo.
+        let stream: MediaStream | null = null;
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({
+            stream = await navigator.mediaDevices.getUserMedia({
                 video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
             });
 
@@ -166,6 +171,11 @@ export default function Console() {
             tacticalAudio.startNeuralHum();
             hapticEngine.pulse("success");
         } catch (err) {
+            stream?.getTracks().forEach((track) => track.stop());
+            if (videoRef.current) videoRef.current.srcObject = null;
+            engineRef.current?.dispose();
+            engineRef.current = null;
+            setIsRunning(false);
             setError(
                 `Camera unavailable: ${err instanceof Error ? err.message : String(err)}`
             );

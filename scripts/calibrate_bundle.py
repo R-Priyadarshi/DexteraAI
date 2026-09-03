@@ -45,9 +45,12 @@ def split_indices(
 ) -> tuple[list[int], list[int], list[int]]:
     """Reproduce `dextera.py::_split_indices` exactly.
 
-    This must stay byte-identical in behaviour to the training-time split, or
-    calibration would be fitted on data the model was trained on and the
-    resulting temperature would be meaningless.
+    The permutation, the seed and *both* split fractions have to match the
+    training run. Getting `test_split` wrong does not leak training data — the
+    train slice starts after both held-out slices, so a smaller test fraction
+    shifts the window earlier into the test set rather than into training — but
+    it does fit the temperature partly on the test split, which is supposed to
+    stay untouched for the final accuracy figure.
     """
     rng = np.random.default_rng(seed)
     perm = rng.permutation(total).tolist()
@@ -61,8 +64,11 @@ def main() -> int:
     p.add_argument("--dataset", required=True, help="Landmark sequence directory")
     p.add_argument("--checkpoint", required=True, help="Trained .pt checkpoint")
     p.add_argument("--bundle", required=True, help="Model bundle dir holding labels.json")
+    # These must match the training run's splits exactly, or the reconstructed
+    # slice is not the validation set the model was validated against.
+    # `dextera.py train` defaults both to 0.15.
     p.add_argument("--val-split", type=float, default=0.15)
-    p.add_argument("--test-split", type=float, default=0.10)
+    p.add_argument("--test-split", type=float, default=0.15)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--device", default="cpu")
     p.add_argument(

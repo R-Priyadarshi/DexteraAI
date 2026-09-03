@@ -373,9 +373,13 @@ def _onnx_eval(
     from training.evaluation.metrics import EvalResult, GestureEvaluator
 
     all_preds, all_labels, all_probs, latencies = [], [], [], []
-    for features, labels, _ in dataset:
+    for features, labels, mask in dataset:
         features_np = np.expand_dims(features, axis=0).astype(np.float32)
-        mask_np = np.ones((1, features_np.shape[1]), dtype=bool)
+        # The dataset already yields the correct padding mask, where True means
+        # *padded*. Synthesising `np.ones(...)` here marked every frame as
+        # padding, so the encoder attended to nothing and the reported accuracy
+        # measured noise.
+        mask_np = np.expand_dims(np.asarray(mask, dtype=bool), axis=0)
         input_feed = {
             name: mask_np if "mask" in name else features_np
             for name in runtime.input_names
@@ -383,9 +387,14 @@ def _onnx_eval(
         t_start = time.perf_counter()
         outputs = runtime.predict(input_feed)
         t_end = time.perf_counter()
-        logits = outputs[0]
-        probs = np.exp(logits) / np.sum(np.exp(logits))
-        pred = np.argmax(logits)
+        # `predict` returns a dict keyed by the model's output names, so an
+        # integer index raised KeyError and this path never completed a run.
+        logits = np.asarray(outputs["logits"]).reshape(-1)
+        # Subtract the max before exponentiating; a large logit otherwise
+        # overflows to inf and the whole distribution becomes NaN.
+        shifted = np.exp(logits - np.max(logits))
+        probs = shifted / np.sum(shifted)
+        pred = int(np.argmax(logits))
         all_preds.append(pred)
         all_labels.append(labels)
         all_probs.append(probs)
@@ -607,7 +616,9 @@ def cmd_benchmark(args: argparse.Namespace) -> None:
         runtime.load(args.checkpoint)
         input_names = runtime.input_names
         dummy_input = rng.standard_normal((1, seq_len, feature_dim), dtype=np.float32)
-        dummy_mask = np.ones((1, seq_len), dtype=bool)
+        # True means padded, so a benchmark over an all-True mask times the
+        # degenerate case where every frame is ignored rather than a real one.
+        dummy_mask = np.zeros((1, seq_len), dtype=bool)
         input_feed = {name: dummy_mask if "mask" in name else dummy_input for name in input_names}
         results = _benchmark_onnx(runtime, input_feed, args.iterations)
         _print_benchmark_results(results, label="ONNX LATENCY BENCHMARK")

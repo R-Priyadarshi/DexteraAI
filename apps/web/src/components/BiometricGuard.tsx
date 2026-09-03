@@ -70,6 +70,28 @@ export function BiometricGuard({ gesture, sequence, onUnlocked }: BiometricGuard
     const [isVerifying, setIsVerifying] = useState(false);
     const holdStartRef = useRef<number | null>(null);
 
+    /**
+     * Latched once the final step completes.
+     *
+     * `isVerifying` cannot do this job: state updates are asynchronous, so the
+     * next camera frame re-enters this effect before the re-render lands, with
+     * `holdStartRef` still set and `currentIndex` unchanged. Every frame of the
+     * one-second verify delay therefore scheduled another `onUnlocked` — about
+     * thirty calls for a single successful unlock.
+     */
+    const unlockedRef = useRef(false);
+    const unlockTimerRef = useRef<number | null>(null);
+
+    // Clear a pending unlock if the guard unmounts mid-verify.
+    useEffect(
+        () => () => {
+            if (unlockTimerRef.current !== null) {
+                window.clearTimeout(unlockTimerRef.current);
+            }
+        },
+        []
+    );
+
     useEffect(() => {
         if (!gesture || gesture.rejected || gesture.gestureId === -1) {
             holdStartRef.current = null;
@@ -90,8 +112,10 @@ export function BiometricGuard({ gesture, sequence, onUnlocked }: BiometricGuard
 
             if (elapsed >= HOLD_TIME_MS) {
                 if (currentIndex === sequence.length - 1) {
+                    if (unlockedRef.current) return;
+                    unlockedRef.current = true;
                     setIsVerifying(true);
-                    setTimeout(() => onUnlocked(), 1000);
+                    unlockTimerRef.current = window.setTimeout(() => onUnlocked(), 1000);
                 } else {
                     setCurrentIndex((prev) => prev + 1);
                     holdStartRef.current = null;

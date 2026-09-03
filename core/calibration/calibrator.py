@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from pathlib import Path  # runtime use in save(), not just an annotation
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -18,8 +19,6 @@ from core.landmarks.features import LandmarkFeatureExtractor
 from core.landmarks.normalizer import LandmarkNormalizer
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from core.types import HandLandmarks
 
 
@@ -161,7 +160,16 @@ class UserCalibrator:
             return None
 
     def save(self, path: str | Path) -> None:
+        """Persist the profile as JSON.
+
+        The parent directory is created if needed: the documented usage writes
+        to `profiles/user_123.json`, and without this the open() raised
+        FileNotFoundError, which the handler below turned into a log line — so
+        the caller was told nothing had gone wrong while nothing was saved.
+        """
+        path = Path(path)
         try:
+            path.parent.mkdir(parents=True, exist_ok=True)
             with open(path, "w") as f:
                 json.dump(self._profile_to_dict(), f, indent=2)
             self.log.info(f"Calibration profile saved: {path}")
@@ -207,8 +215,15 @@ class UserCalibrator:
 
     def _dict_to_profile(self, data: dict[str, Any]) -> None:
         self.profile.user_id = data.get("user_id", "")
+        # `gestures` was the key an earlier version wrote. Falling back to it
+        # keeps existing profiles loadable; without this they parse cleanly,
+        # yield zero references, and report success — a silent reset of the
+        # user's calibration.
+        references = data.get("gesture_references")
+        if references is None:
+            references = data.get("gestures", {})
         self.profile.gesture_references = {
-            k: [np.array(f) for f in v] for k, v in data.get("gesture_references", {}).items()
+            k: [np.array(f) for f in v] for k, v in references.items()
         }
         self.profile.created_at = data.get("created_at", "")
         self.profile.hand_scale = data.get("hand_scale", 1.0)

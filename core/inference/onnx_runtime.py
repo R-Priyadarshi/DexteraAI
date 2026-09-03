@@ -105,23 +105,45 @@ class ONNXInferenceRuntime:
 
     @staticmethod
     def _detect_providers() -> list[str]:
-        """Auto-detect available execution providers."""
+        """Auto-detect available execution providers, fastest first.
+
+        Names must match ONNX Runtime's exactly or the provider is simply never
+        selected: DirectML registers as `DmlExecutionProvider`, not
+        `DirectMLExecutionProvider`, so the previous list silently fell through
+        to CPU on every Windows GPU.
+        """
         available = ort.get_available_providers()
-        return [
-            p for p in [
-                "CUDAExecutionProvider",
-                "DirectMLExecutionProvider",
-                "CPUExecutionProvider"
-            ] if p in available
+        preferred = [
+            "CUDAExecutionProvider",
+            "DmlExecutionProvider",
+            "CoreMLExecutionProvider",
+            "CPUExecutionProvider",
         ]
+        selected = [p for p in preferred if p in available]
+
+        # CPU is always registered, but guarantee it is present and last so a
+        # build with only exotic providers still has something to fall back to.
+        if "CPUExecutionProvider" not in selected:
+            selected.append("CPUExecutionProvider")
+        return selected
 
     def load(self, model_path: str | Path) -> None:
         """Load ONNX model with robust error handling and versioning."""
         try:
+            # A bare SessionOptions() discards everything the constructor was
+            # given: thread count, graph optimisation and profiling were all
+            # accepted as arguments and then silently ignored.
+            options = ort.SessionOptions()
+            options.intra_op_num_threads = self._num_threads
+            options.graph_optimization_level = (
+                ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            )
+            options.enable_profiling = self._enable_profiling
+
             self._session = ort.InferenceSession(
                 str(model_path),
                 providers=self._providers,
-                sess_options=ort.SessionOptions()
+                sess_options=options,
             )
             self._input_names = [i.name for i in self._session.get_inputs()]
             self._output_names = [o.name for o in self._session.get_outputs()]
@@ -151,10 +173,19 @@ class ONNXInferenceRuntime:
         return self._model_version
 
     def enable_profiling(self) -> None:
-        """Enable ONNX Runtime profiling for performance analysis."""
-        if self._session:
-            self._session.enable_profiling()
-            self._log.info("ONNX profiling enabled.")
+        """Request profiling for subsequently loaded sessions.
+
+        ONNX Runtime has no `session.enable_profiling()` — profiling is a
+        SessionOptions flag fixed when the session is created, so calling it on
+        a live session raised AttributeError. Setting the flag here and
+        reloading is the only way to turn it on.
+        """
+        self._enable_profiling = True
+        if self._session is not None:
+            self._log.warning(
+                "Profiling applies from the next load(); the current session "
+                "was created without it."
+            )
 
     def get_profiling_data(self) -> Any:
         """Retrieve profiling data if enabled."""

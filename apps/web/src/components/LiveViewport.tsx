@@ -171,15 +171,24 @@ export function LiveViewport({
   const start = useCallback(async () => {
     if (runningRef.current) return;
 
+    // Declared outside the try so the failure paths below can release it.
+    // `engine.initialize` throws deliberately when WebGL is unavailable, and
+    // an abandoned stream leaves the camera light on with nothing using it.
+    let stream: MediaStream | null = null;
+
     try {
       setStatusSafe("requesting");
-      const stream = await navigator.mediaDevices.getUserMedia({
+      stream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
         audio: false,
       });
 
       const video = videoRef.current;
-      if (!video) return;
+      if (!video) {
+        // Unmounted between the permission prompt and the grant.
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
       video.srcObject = stream;
       await video.play();
 
@@ -232,6 +241,12 @@ export function LiveViewport({
 
       rafRef.current = requestAnimationFrame(() => void loop());
     } catch (err) {
+      stream?.getTracks().forEach((t) => t.stop());
+      if (videoRef.current) videoRef.current.srcObject = null;
+      engineRef.current?.dispose();
+      engineRef.current = null;
+      runningRef.current = false;
+
       const name = (err as { name?: string })?.name;
       if (name === "NotAllowedError" || name === "SecurityError") {
         setStatusSafe("denied");

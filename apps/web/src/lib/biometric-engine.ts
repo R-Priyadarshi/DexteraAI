@@ -32,8 +32,17 @@ export class BiometricEngine {
     private loadSignature() {
         if (typeof window === "undefined") return;
         const saved = localStorage.getItem("dextera_biometric_sig");
-        if (saved) {
+        if (!saved) return;
+        try {
             this.signature = JSON.parse(saved);
+        } catch (err) {
+            // This constructor runs at module import, so an unguarded parse
+            // turns one corrupt localStorage entry into a blank console with a
+            // stack trace — the sibling stores all guard theirs. Discard the
+            // bad value so the user can simply recalibrate.
+            console.error("BiometricEngine: discarding corrupt signature", err);
+            localStorage.removeItem("dextera_biometric_sig");
+            this.signature = null;
         }
     }
 

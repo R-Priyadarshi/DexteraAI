@@ -124,6 +124,15 @@ const FEATURE_DIM = 86;
  */
 export const CUSTOM_GESTURE_ID = 999;
 
+/**
+ * How long to wait for MediaPipe to return landmarks for one frame.
+ *
+ * Generous, because detection genuinely takes hundreds of milliseconds on a
+ * machine without GPU acceleration. This exists to bound a hang, not to police
+ * latency.
+ */
+const DETECTION_TIMEOUT_MS = 2000;
+
 /** Minimum prototype-match confidence for a taught gesture to be reported. */
 const CUSTOM_MATCH_THRESHOLD = 0.8;
 
@@ -552,11 +561,31 @@ export class GestureEngine {
 
     // 1. Landmark detection. MediaPipe's callback API is wrapped in a promise
     //    so the caller can await one frame at a time.
-    const detectionWait = new Promise<void>((resolve, reject) => {
-      this.currentDetectionPromise = { resolve, reject };
-      this.hands!.send({ image: video }).catch(reject);
-    });
-    await detectionWait;
+    //
+    //    The wait is bounded. MediaPipe occasionally drops a frame without
+    //    invoking `onResults` — most reliably when the WebGL context is lost —
+    //    and an unbounded await there hangs `processFrame` permanently, which
+    //    presents as the console freezing with the camera still on. A timeout
+    //    turns that into one skipped frame.
+    let timer: number | undefined;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        this.currentDetectionPromise = { resolve, reject };
+        timer = window.setTimeout(() => {
+          this.currentDetectionPromise = null;
+          reject(new Error("MediaPipe detection timed out"));
+        }, DETECTION_TIMEOUT_MS);
+        this.hands!.send({ image: video }).catch(reject);
+      });
+    } catch {
+      // A dropped or timed-out frame is reported as "no hand" rather than
+      // thrown: the caller is a render loop, and one bad frame must not stop it.
+      this.currentDetectionPromise = null;
+      for (const track of this.tracks.values()) track.markMissing();
+      return this.emptyResult(performance.now() - t0);
+    } finally {
+      if (timer !== undefined) window.clearTimeout(timer);
+    }
 
     const mp = this.lastMPResults;
     const detected: Landmark[][] = mp?.multiHandLandmarks ?? [];
@@ -884,6 +913,10 @@ export class GestureEngine {
     }
     this.hands = null;
     this.lastMPResults = null;
+    // Settle any in-flight wait instead of dropping the reference: an awaiting
+    // `processFrame` would otherwise never resume, and its caller never learn
+    // the engine was torn down.
+    this.currentDetectionPromise?.reject(new Error("GestureEngine disposed"));
     this.currentDetectionPromise = null;
     this.tracks.clear();
     this.isInitialized = false;

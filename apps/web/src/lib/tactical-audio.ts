@@ -53,13 +53,24 @@ export class TacticalAudio {
     }
 
     stopNeuralHum() {
-        if (this.humGain && this.ctx) {
-            this.humGain.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 0.5);
-            setTimeout(() => {
-                this.neuralHum?.stop();
-                this.neuralHum = null;
-            }, 500);
-        }
+        if (!this.humGain || !this.ctx) return;
+
+        // Capture the oscillator being faded out. The deferred callback used to
+        // read `this.neuralHum` at fire time, so a hum restarted inside the
+        // 500ms fade — stopping and starting the camera quickly does exactly
+        // that — was stopped by the *previous* stop's timer, leaving the
+        // console silent with no way to recover short of a reload.
+        const fading = this.neuralHum;
+        this.neuralHum = null;
+
+        this.humGain.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 0.5);
+        setTimeout(() => {
+            try {
+                fading?.stop();
+            } catch {
+                // Already stopped; an oscillator cannot be stopped twice.
+            }
+        }, 500);
     }
 
     /**

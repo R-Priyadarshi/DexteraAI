@@ -16,7 +16,20 @@ interface IntentDefinition {
 export class VoiceEngine {
     private static instance: VoiceEngine;
     private recognition: any | null = null;
+    /** Whether the browser's recogniser is currently running. */
     private isListening = false;
+
+    /**
+     * Whether we *want* to be listening.
+     *
+     * Distinct from `isListening`, which reflects the recogniser's actual
+     * state. The Web Speech API ends a session on every pause in speech, so
+     * continuous listening means restarting on `onend` — and the restart
+     * decision has to consult intent, not state. Checking `isListening` there
+     * could never work: `onend` sets it false immediately above the check, so
+     * recognition stopped for good after the first silence.
+     */
+    private shouldListen = false;
     private onIntentDetected: (intent: VoiceIntent, confidence: number) => void = () => { };
     private onStatusChange: (status: "idle" | "listening" | "processing" | "error") => void = () => { };
 
@@ -75,8 +88,21 @@ export class VoiceEngine {
 
         this.recognition.onend = () => {
             this.isListening = false;
-            this.onStatusChange("idle");
-            if (this.isListening) this.recognition.start();
+            if (!this.shouldListen) {
+                this.onStatusChange("idle");
+                return;
+            }
+            // Restarting synchronously inside onend throws InvalidStateError in
+            // some browsers, which would kill listening permanently.
+            setTimeout(() => {
+                if (!this.shouldListen) return;
+                try {
+                    this.recognition.start();
+                } catch {
+                    // Already starting, or the engine is shutting down. Either
+                    // way the next onend will try again.
+                }
+            }, 150);
         };
 
         this.recognition.onresult = (event: any) => {
@@ -89,8 +115,11 @@ export class VoiceEngine {
             this.parseIntent(transcript);
         };
 
-        this.recognition.onerror = () => {
-            this.onStatusChange("error");
+        this.recognition.onerror = (event: any) => {
+            // `no-speech` and `aborted` are routine in continuous listening —
+            // reporting them as errors makes an idle microphone look broken.
+            const benign = event?.error === "no-speech" || event?.error === "aborted";
+            if (!benign) this.onStatusChange("error");
         };
     }
 
@@ -115,7 +144,6 @@ export class VoiceEngine {
         // Confidence heuristic: Normalize by max possible weight in the best intent
         if (bestIntent && maxScore >= 0.6) {
             const confidence = Math.min(1.0, maxScore);
-            console.log(`VoiceEngine: Intent Resolved [${bestIntent}] (Score: ${maxScore})`);
             this.onIntentDetected(bestIntent, confidence);
         }
     }
@@ -130,14 +158,22 @@ export class VoiceEngine {
         this.onIntentDetected = callbacks.onIntent;
         this.onStatusChange = callbacks.onStatus;
 
+        this.shouldListen = true;
         try {
             this.recognition.start();
-        } catch (e) {}
+        } catch {
+            // start() throws if a session is already running, which is
+            // harmless — `shouldListen` is set, so onend will keep it alive.
+        }
     }
 
     public stop() {
+        // Cleared before stopping, so the onend handler sees the intent and
+        // does not immediately restart what we just stopped.
+        this.shouldListen = false;
         this.isListening = false;
         this.recognition?.stop();
+        this.onStatusChange("idle");
     }
 }
 
