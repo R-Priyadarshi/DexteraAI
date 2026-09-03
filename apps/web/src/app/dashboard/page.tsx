@@ -19,6 +19,8 @@ import { calibrator, type CalibrationMetrics } from "@/lib/calibrator";
 import { SpatialDeck } from "@/components/SpatialDeck";
 import { ActionMapper } from "@/components/ActionMapper";
 import { actionRegistry } from "@/lib/action-registry";
+import { PointerEngine, clickAt, type PointerState } from "@/lib/pointer-engine";
+import { PointerOverlay } from "@/components/PointerOverlay";
 import { CalibrationWizard } from "@/components/CalibrationWizard";
 import { biometricEngine } from "@/lib/biometric-engine";
 import { Sparkline, StatusFlag } from "@/components/Telemetry";
@@ -46,6 +48,27 @@ export default function Console() {
     const [isRunning, setIsRunning] = useState(false);
     const [bundleId, setBundleId] = useState<BundleId>("hagrid");
     const [twoHanded, setTwoHanded] = useState(false);
+
+    /**
+     * Hands-free pointing. Off by default: while it is on, the hand drives a
+     * cursor that clicks whatever it rests on, which is not what someone
+     * exploring the console expects to happen.
+     */
+    const [pointerMode, setPointerMode] = useState(false);
+    const pointerEngineRef = useRef<PointerEngine | null>(null);
+    const [pointer, setPointer] = useState<PointerState | null>(null);
+    const [clickFlash, setClickFlash] = useState(false);
+
+    // Read from inside the animation loop, which must not be re-created when
+    // this toggles.
+    const pointerModeRef = useRef(pointerMode);
+    useEffect(() => {
+        pointerModeRef.current = pointerMode;
+        if (!pointerMode) {
+            pointerEngineRef.current?.reset();
+            setPointer(null);
+        }
+    }, [pointerMode]);
 
     // Read inside the camera-start callback, which must not re-create itself
     // when this toggles — doing so tears the camera down mid-session.
@@ -257,6 +280,24 @@ export default function Console() {
                         drawLandmarks(canvas, result);
                         calibrator.record(result.landmarks);
 
+                        // Pointer runs every frame, not on the throttled state
+                        // tick: a cursor updated ten times a second is unusable.
+                        if (pointerModeRef.current) {
+                            const engine = (pointerEngineRef.current ??= new PointerEngine());
+                            const state = engine.update(
+                                result.landmarks,
+                                { width: window.innerWidth, height: window.innerHeight },
+                                performance.now()
+                            );
+                            setPointer(state);
+                            if (state.clicked) {
+                                clickAt(state.x, state.y);
+                                hapticEngine.pulse("light");
+                                setClickFlash(true);
+                                window.setTimeout(() => setClickFlash(false), 180);
+                            }
+                        }
+
                         const now = performance.now();
                         if (now - lastStateUpdateTimeRef.current > 100) {
                             const ms = Math.round(result.inferenceTimeMs);
@@ -375,6 +416,16 @@ export default function Console() {
     return (
         <main className="min-h-screen">
             {/* Modals */}
+            {pointerMode && pointer && (
+                <PointerOverlay
+                    x={pointer.x}
+                    y={pointer.y}
+                    dwellProgress={pointer.dwellProgress}
+                    active={pointer.active}
+                    flash={clickFlash}
+                />
+            )}
+
             {isStudioOpen && <GestureStudio gesture={gesture} onClose={() => setIsStudioOpen(false)} />}
             {isMapperOpen && (
                 <ActionMapper vocabulary={vocabulary} onClose={() => setIsMapperOpen(false)} />
@@ -471,6 +522,19 @@ export default function Console() {
                                     title="Track both hands. Roughly doubles landmark-detection cost."
                                 >
                                     {twoHanded ? "2 hands" : "1 hand"}
+                                </button>
+                                <button
+                                    onClick={() => setPointerMode((v) => !v)}
+                                    className="border px-3 py-1.5 label transition-colors"
+                                    style={{
+                                        borderRadius: 2,
+                                        borderColor: pointerMode ? "var(--signal)" : "var(--rule-strong)",
+                                        color: pointerMode ? "var(--signal)" : "var(--ink-3)",
+                                        background: pointerMode ? "var(--signal-4)" : "transparent",
+                                    }}
+                                    title="Point with your index finger; hold still to click."
+                                >
+                                    Pointer
                                 </button>
                             </div>
                         </div>
