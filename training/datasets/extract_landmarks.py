@@ -164,13 +164,35 @@ def iter_hf_dataset(
     return label_names, generator()
 
 
-def iter_image_dir(image_dir: Path, max_per_class: int | None) -> tuple[list[str], Any]:
-    """Iterate a folder-per-class image directory."""
+def iter_image_dir(
+    image_dir: Path,
+    max_per_class: int | None,
+    exclude: frozenset[str] = frozenset(),
+) -> tuple[list[str], Any]:
+    """Iterate a folder-per-class image directory.
+
+    `exclude` drops class directories by name. Corpora sometimes carry a class
+    this pipeline cannot represent - a two-handed sign, say, against an 86-dim
+    single-hand feature vector - and training on one produces a class that can
+    never fire correctly rather than an error.
+    """
     import cv2
 
     class_dirs = sorted(d for d in image_dir.iterdir() if d.is_dir())
     if not class_dirs:
         raise ValueError(f"No class subdirectories found under {image_dir}")
+
+    if exclude:
+        present = {d.name for d in class_dirs}
+        missing = exclude - present
+        if missing:
+            raise ValueError(
+                f"--exclude-classes names {sorted(missing)}, absent from {image_dir}. "
+                f"Available: {sorted(present)}"
+            )
+        class_dirs = [d for d in class_dirs if d.name not in exclude]
+        logger.info(f"Excluding {len(exclude)} class(es): {sorted(exclude)}")
+
     label_names = [d.name for d in class_dirs]
     logger.info(f"Found {len(label_names)} classes in {image_dir}")
 
@@ -368,6 +390,15 @@ def main() -> None:
         help="Cap samples per class (keeps runs fast and classes balanced)",
     )
     parser.add_argument(
+        "--exclude-classes",
+        type=str,
+        default="",
+        help=(
+            "Comma-separated class directory names to skip (--image-dir only). "
+            "Use for classes this single-hand pipeline cannot represent."
+        ),
+    )
+    parser.add_argument(
         "--workers",
         type=int,
         default=max(1, (os.cpu_count() or 4) - 2),
@@ -398,8 +429,11 @@ def main() -> None:
         )
         source_name = f"parquet:{args.parquet_dir}"
     else:
-        label_names, stream = iter_image_dir(Path(args.image_dir), args.max_per_class)
+        excluded = frozenset(c.strip() for c in args.exclude_classes.split(",") if c.strip())
+        label_names, stream = iter_image_dir(Path(args.image_dir), args.max_per_class, excluded)
         source_name = f"dir:{args.image_dir}"
+        if excluded:
+            source_name += f" (excluding {','.join(sorted(excluded))})"
 
     logger.info(f"Classes ({len(label_names)}): {label_names}")
     extract(stream, label_names, output_dir, args.workers, source_name)

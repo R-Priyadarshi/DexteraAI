@@ -104,6 +104,23 @@ problem. Checked 2026-09-04.
 | **ASL-HG** ([Mendeley `j4y5w2c8w9`](https://data.mendeley.com/datasets/j4y5w2c8w9/1)) | 36,000 high-resolution JPGs, 36 classes (A–Z **and 0–9**), folder-per-class | Structure `extract_landmarks.py --image-dir` already reads. Adds digits, widening the vocabulary rather than just replacing it. Provenance is documented: 10 volunteers, Dhaka, May–June 2025 | 10 subjects is a narrow pool; expect weaker generalisation across hands than the sample count suggests. The current dataset's subject diversity is simply unknown, so this is a known limit replacing an unknown one |
 | **ASL Alphabet** ([Mendeley `jdyksv2jhh`](https://data.mendeley.com/datasets/jdyksv2jhh/1)) | Train/Test folders, one per letter | Same folder-per-class shape; backed by a peer-reviewed paper (Cabana, IntelliSys 2025, DOI 10.1007/978-3-032-00071-2_15) | Image count and resolution not stated on the landing page; confirm before committing to it |
 
+ASL-HG is the chosen replacement, and the path is wired up:
+
+```bash
+# Download ASL_Raw_Images.zip by hand - Mendeley does not serve files to its API
+# https://data.mendeley.com/datasets/j4y5w2c8w9/1
+unzip ASL_Raw_Images.zip -d data/raw/asl_hg
+make retrain-asl-clean
+```
+
+Class `0` is excluded by that target. ASL-HG deliberately uses the **two-handed**
+ASL sign for zero to keep it distinct from the letter `O`, which is good corpus
+design and incompatible with this pipeline: the feature vector encodes one hand
+in 86 dimensions, so a two-handed sign arrives as whichever hand MediaPipe
+happened to find. Training on it would not error — it would produce a class that
+can never fire correctly while drawing probability away from `O`. The result is
+35 classes: A–Z plus 1–9.
+
 Sign Language MNIST is **not** a candidate despite being CC0: 28x28 grayscale is
 far below what MediaPipe needs to find 21 hand landmarks, and it omits J and Z.
 A permissive licence on data this pipeline cannot read is no use.

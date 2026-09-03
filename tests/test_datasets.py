@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import numpy as np
+import pytest
 import torch
 
 from training.datasets.gesture_dataset import (
@@ -166,3 +167,49 @@ class TestGestureSequenceDataset:
     def test_empty_dataset(self, tmp_path: Path) -> None:
         ds = GestureSequenceDataset(tmp_path, seq_len=30)
         assert len(ds) == 0
+
+
+class TestImageDirExclusion:
+    """`--exclude-classes` on the folder-per-class extractor.
+
+    A corpus can carry a class this single-hand pipeline cannot represent — the
+    ASL-HG two-handed sign for "0" is the case this was added for. Training on
+    one yields a class that can never fire correctly, which is worse than not
+    having it, because it also draws probability mass away from the class it
+    resembles ("O").
+    """
+
+    @staticmethod
+    def _corpus(root: Path) -> Path:
+        import cv2
+
+        for name in ("A", "B", "0"):
+            class_dir = root / name
+            class_dir.mkdir(parents=True)
+            cv2.imwrite(str(class_dir / "0.png"), np.zeros((32, 32, 3), dtype=np.uint8))
+        return root
+
+    def test_excluded_class_is_dropped(self, tmp_path: Path) -> None:
+        from training.datasets.extract_landmarks import iter_image_dir
+
+        labels, _ = iter_image_dir(self._corpus(tmp_path), None, frozenset({"0"}))
+        assert labels == ["A", "B"]
+
+    def test_labels_stay_contiguous_after_exclusion(self, tmp_path: Path) -> None:
+        """Indices must renumber, not leave a hole.
+
+        Labels are positional against the model's logits, so a gap here would
+        silently shift every class after it by one.
+        """
+        from training.datasets.extract_landmarks import iter_image_dir
+
+        labels, stream = iter_image_dir(self._corpus(tmp_path), None, frozenset({"0"}))
+        emitted = sorted({idx for _, idx in stream})
+        assert emitted == list(range(len(labels)))
+
+    def test_unknown_class_name_is_rejected(self, tmp_path: Path) -> None:
+        """A typo must fail loudly rather than silently exclude nothing."""
+        from training.datasets.extract_landmarks import iter_image_dir
+
+        with pytest.raises(ValueError, match="absent from"):
+            iter_image_dir(self._corpus(tmp_path), None, frozenset({"zero"}))

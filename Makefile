@@ -77,6 +77,25 @@ extract-hagrid:  ## Extract landmarks from HaGRID parquet shards
 	python -m training.datasets.extract_landmarks \
 		--parquet-dir data/raw/hagrid_parquet --output data/sequences/hagrid --max-per-class 4000
 
+# Replaces models/asl_alphabet, whose current training data carries no licence.
+# ASL-HG is CC BY 4.0: commercial use allowed, attribution only, no share-alike.
+# Download ASL_Raw_Images.zip by hand first - Mendeley does not serve files to
+# the API - and unzip it so that data/raw/asl_hg/ holds one folder per class:
+#     https://data.mendeley.com/datasets/j4y5w2c8w9/1
+# Class "0" is excluded because ASL-HG uses the two-handed sign for it and this
+# pipeline encodes a single hand; see docs/DATASET_LICENSES.md.
+retrain-asl-clean:  ## Rebuild the fingerspelling model on CC BY 4.0 data (ASL-HG)
+	@test -d data/raw/asl_hg || { \
+		echo "error: data/raw/asl_hg not found."; \
+		echo "Download ASL_Raw_Images.zip from https://data.mendeley.com/datasets/j4y5w2c8w9/1"; \
+		echo "and unzip it to data/raw/asl_hg/ (one folder per class)."; exit 1; }
+	python -m training.datasets.extract_landmarks \
+		--image-dir data/raw/asl_hg --output data/sequences/asl_hg --exclude-classes 0
+	python dextera.py train --dataset data/sequences/asl_hg \
+		--epochs 80 --calibrate --export models/asl_alphabet
+	cd apps/web && npm run sync-runtime
+	@echo "Done. Update docs/DATASET_LICENSES.md and models/LICENSE to match."
+
 info:  ## Show system information
 	python dextera.py info
 
