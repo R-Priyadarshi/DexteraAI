@@ -177,6 +177,11 @@ Web app (self-contained, no backend needed):
 cd apps/web && npm install && npm run dev
 ```
 
+Both trained bundles are in the repo under `models/`, so this runs recognition
+straight from a clone with nothing to download. `npm install` copies them into
+`public/onnx/` alongside the WASM runtimes; re-run `npm run sync-runtime` after
+retraining a model or upgrading `onnxruntime-web`.
+
 Train on real data end to end:
 
 ```bash

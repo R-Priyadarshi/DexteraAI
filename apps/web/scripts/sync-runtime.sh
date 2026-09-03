@@ -14,6 +14,9 @@ cd "$(dirname "$0")/.."
 ORT_SRC="node_modules/onnxruntime-web/dist"
 MP_SRC="node_modules/@mediapipe/hands"
 TASKS_SRC="node_modules/@mediapipe/tasks-vision/wasm"
+# Model bundles the dashboard offers; keep in step with MODEL_BUNDLES in
+# src/app/dashboard/page.tsx.
+BUNDLES=(hagrid asl_alphabet)
 FACE_MODEL="../../models/mediapipe/face_landmarker.task"
 DEST="public/onnx"
 
@@ -53,13 +56,32 @@ else
   echo "note: $FACE_MODEL missing — run 'make fetch-models' for face markers" >&2
 fi
 
+# Trained gesture bundles. These live in models/<name>/ under version control
+# and are copied here because Next only serves what is under public/. Keeping
+# one copy tracked instead of two keeps the weights from being stored twice.
+for bundle in "${BUNDLES[@]}"; do
+  src="../../models/$bundle"
+  if [ -f "$src/gesture.onnx" ]; then
+    echo "Syncing $bundle model bundle -> $DEST/$bundle"
+    mkdir -p "$DEST/$bundle"
+    cp -f "$src/gesture.onnx" "$src/labels.json" "$DEST/$bundle"/
+    # Weights live beside the graph as external data whenever the exporter
+    # split them out; a bundle exported below the threshold has none.
+    [ -f "$src/gesture.onnx.data" ] && cp -f "$src/gesture.onnx.data" "$DEST/$bundle"/
+  else
+    echo "warning: $src/gesture.onnx missing; '$bundle' will not load" >&2
+  fi
+done
+
 echo "Done. Runtime files in $DEST:"
 ls -1 "$DEST"/*.wasm 2>/dev/null | wc -l | xargs echo "  wasm files:"
 ls -1 "$DEST/mediapipe" 2>/dev/null | wc -l | xargs echo "  mediapipe files:"
 
+ls -1 "$DEST"/*/gesture.onnx 2>/dev/null | wc -l | xargs echo "  model bundles:"
+
 cat <<'NOTE'
 
-Model bundles (gesture.onnx + labels.json) are produced by training, not npm:
+To add a bundle: train and export it, then list it in BUNDLES above and in
+MODEL_BUNDLES in src/app/dashboard/page.tsx.
     python dextera.py train --dataset data/sequences/<name> --export models/<name>
-    cp models/<name>/gesture.onnx* models/<name>/labels.json apps/web/public/onnx/<name>/
 NOTE

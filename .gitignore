@@ -48,6 +48,13 @@ models/mediapipe/
 !models/.gitkeep
 # small, describes the bundle's vocabulary
 !models/**/labels.json
+# The two shipped bundles are the product, not a build artifact: ~2.3MB each,
+# retrained rarely, and without them a fresh clone has no model to run. Every
+# other export stays ignored — un-ignore a bundle here only when it ships.
+!models/hagrid/gesture.onnx
+!models/hagrid/gesture.onnx.data
+!models/asl_alphabet/gesture.onnx
+!models/asl_alphabet/gesture.onnx.data
 
 # ── MLflow ──
 mlruns/
@@ -95,7 +102,9 @@ apps/web/public/onnx/mediapipe/
 # MediaPipe Tasks WASM for the face landmarker, copied from node_modules by
 # scripts/sync-runtime.sh. Large binaries that npm already ships.
 apps/web/public/onnx/tasks/
-# Trained model bundles are build artifacts; only their label manifest is tracked.
+# Model bundles here are copies of models/<name>/, placed by sync-runtime.sh.
+# The originals are tracked; copying them into git too would double the weight
+# for no gain.
 apps/web/public/onnx/**/*.onnx
 apps/web/public/onnx/**/*.onnx.data
 !apps/web/public/onnx/**/labels.json
