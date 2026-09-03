@@ -195,6 +195,50 @@ export class ActionRegistry {
         localStorage.setItem(ActionRegistry.STORAGE_KEY, JSON.stringify(data));
     }
 
+    /**
+     * Dispatch the action bound to a two-handed combo.
+     *
+     * Combos are stored in the same map under a `left+right` key. They cannot
+     * collide with single-hand labels because no label contains "+".
+     */
+    public dispatchCombo(result: GestureResult): GestureAction | null {
+        const combo = result.combo;
+        if (!combo) return null;
+
+        // A combo fires when either hand's segment opens, so the pair is
+        // recognised whichever hand the user forms second. The segment id pair
+        // is what stops it firing again for the same held pose.
+        const onset = result.hands.some((h) => h.phase === "onset");
+        if (!onset) return null;
+
+        const key = result.hands
+            .map((h) => h.segmentId)
+            .sort((a, b) => a - b)
+            .join(":");
+        if (key === this.lastComboKey) return null;
+
+        const actionId = this.mappings.get(combo.id);
+        if (!actionId) return null;
+        const action = this.actionLibrary.get(actionId);
+        if (!action) return null;
+
+        const now = Date.now();
+        const last = this.lastFiredAt.get(action.id) ?? 0;
+        if (now - last < this.cooldownMs) return null;
+
+        try {
+            action.execute();
+        } catch (err) {
+            console.error(`ActionRegistry: action "${action.id}" threw`, err);
+            return null;
+        }
+        this.lastComboKey = key;
+        this.lastFiredAt.set(action.id, now);
+        return action;
+    }
+
+    private lastComboKey: string | null = null;
+
     /** Bind a gesture label to an action, or unbind it with `null`. */
     public remap(gestureName: string, actionId: string | null) {
         if (actionId === null) {

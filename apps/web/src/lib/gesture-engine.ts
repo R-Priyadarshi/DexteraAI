@@ -10,11 +10,10 @@
 
 import * as ort from "onnxruntime-web";
 import { gestureStore } from "./gesture-store";
-import {
-  GestureSegmenter,
-  type GesturePhase,
-  type SegmenterConfig,
-} from "./gesture-segmenter";
+import { type GesturePhase, type SegmenterConfig } from "./gesture-segmenter";
+import { HandTrack, type Handedness, type HandResult } from "./hand-track";
+
+export type { HandResult, Handedness } from "./hand-track";
 
 // Global Hands from /onnx/mediapipe/hands.js loaded in layout.tsx
 declare const Hands: any;
@@ -63,6 +62,38 @@ export interface GestureResult {
   heldMs: number;
   /** Unique id of the current segment, for de-duplicating repeated holds. */
   segmentId: number;
+  /**
+   * Every hand detected this frame, each with independent recognition state.
+   * The top-level fields above mirror `hands[0]`, the primary hand, so existing
+   * single-hand consumers keep working unchanged.
+   */
+  hands: HandResult[];
+  /**
+   * Set when two hands are detected and both produced an accepted label, in a
+   * stable left/right order. Null whenever fewer than two hands are present.
+   */
+  combo: TwoHandedCombo | null;
+}
+
+/**
+ * A two-handed pose, expressed as an ordered pair of single-hand labels.
+ *
+ * The shipped models are trained on one hand, so a genuine two-hand classifier
+ * would need two-hand training data that neither HaGRID nor the ASL alphabet
+ * set provides. Composing the pair from two independent single-hand
+ * predictions is the honest alternative: it is not a two-handed *model*, but it
+ * does give a real two-handed command surface — and squares the vocabulary,
+ * since 18 labels yield 324 ordered pairs.
+ */
+export interface TwoHandedCombo {
+  left: string;
+  right: string;
+  /** `left+right`, for use as a binding key. */
+  id: string;
+  /** The weaker of the two hands' confidences — the pair is only as good as that. */
+  confidence: number;
+  /** Distance between the two wrists, normalised. Drives scale gestures. */
+  separation: number;
 }
 
 /**
@@ -91,6 +122,14 @@ const FEATURE_DIM = 86;
  * grows.
  */
 export const CUSTOM_GESTURE_ID = 999;
+
+/** Minimum k-NN confidence for a taught gesture to be reported. */
+const CUSTOM_MATCH_THRESHOLD = 0.88;
+
+/** Per-finger curl ratios occupy indices 78-82 of the 86-dim feature vector. */
+const CURL_FEATURE_START = 78;
+const CURL_FEATURE_END = 82;
+const CURL_WEIGHT = 2.0;
 const DEFAULT_SEQUENCE_LENGTH = 30;
 
 /** Shape of the labels.json emitted next to an exported gesture.onnx. */
@@ -251,8 +290,13 @@ export class GestureEngine {
 
   private hands: any | null = null;
   private session: ort.InferenceSession | null = null;
-  private sequenceBuffer: Float32Array[] = [];
   private isInitialized = false;
+
+  /** Recognition state per hand, keyed by handedness. */
+  private tracks = new Map<Handedness, HandTrack>();
+
+  /** Hands MediaPipe is configured to detect. */
+  private maxHands = 1;
   private labels: string[] = [...DEFAULT_GESTURE_LABELS];
   private sequenceLength: number = DEFAULT_SEQUENCE_LENGTH;
 
@@ -264,15 +308,52 @@ export class GestureEngine {
   private temperature = 1.0;
   private rejectionThreshold = 0.6;
 
-  private readonly segmenter = new GestureSegmenter();
+  private segmenterConfig: Partial<SegmenterConfig> = {};
 
   /** Tune onset/offset behaviour, e.g. for a latency-sensitive binding. */
   configureSegmenter(config: Partial<SegmenterConfig>): void {
-    this.segmenter.configure(config);
+    this.segmenterConfig = { ...this.segmenterConfig, ...config };
+    for (const track of this.tracks.values()) track.segmenter.configure(config);
   }
 
   getSegmenterConfig(): SegmenterConfig {
-    return this.segmenter.getConfig();
+    return this.track("unknown").segmenter.getConfig();
+  }
+
+  /**
+   * Detect one hand or two.
+   *
+   * Two-handed tracking roughly doubles landmark-detection cost, so it stays
+   * opt-in rather than being the default on every device.
+   */
+  async setMaxHands(count: 1 | 2): Promise<void> {
+    if (count === this.maxHands) return;
+    this.maxHands = count;
+    if (this.hands) {
+      this.hands.setOptions({
+        maxNumHands: count,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.3,
+        minTrackingConfidence: 0.2,
+      });
+    }
+    // State for a hand that is no longer tracked would otherwise persist and
+    // resurface stale on the next switch back.
+    this.tracks.clear();
+  }
+
+  getMaxHands(): number {
+    return this.maxHands;
+  }
+
+  /** Track for a hand, created on first sight. */
+  private track(handedness: Handedness): HandTrack {
+    let t = this.tracks.get(handedness);
+    if (!t) {
+      t = new HandTrack(handedness, this.segmenterConfig);
+      this.tracks.set(handedness, t);
+    }
+    return t;
   }
 
   /** Calibration actually in force, for display in the console. */
@@ -405,7 +486,7 @@ export class GestureEngine {
     });
 
     this.hands.setOptions({
-      maxNumHands: 1,
+      maxNumHands: this.maxHands,
       modelComplexity: 1,
       minDetectionConfidence: 0.3, // High sensitivity
       minTrackingConfidence: 0.2,  // High sensitivity
@@ -426,15 +507,6 @@ export class GestureEngine {
   private lastMPResults: any = null;
   private currentDetectionPromise: { resolve: Function, reject: Function } | null = null;
 
-  private lastLandmarks: Landmark[] | null = null;
-  private lastTimestamp: number = 0;
-
-  // Motion smoothing buffers: velocity samples, wrist positions, and a
-  // stationary-frame counter used to gate pinch detection.
-  private vBuffer: { x: number; y: number }[] = [];
-  private pBuffer: { x: number; y: number }[] = [];
-  private stationaryFrames: number = 0;
-
   /**
    * Process a video frame and return gesture results.
    * All processing happens on-device.
@@ -446,201 +518,187 @@ export class GestureEngine {
 
     const t0 = performance.now();
 
-    // 1. Trigger MediaPipe Landmark Detection with Sync Wrapper
+    // 1. Landmark detection. MediaPipe's callback API is wrapped in a promise
+    //    so the caller can await one frame at a time.
     const detectionWait = new Promise<void>((resolve, reject) => {
-        this.currentDetectionPromise = { resolve, reject };
-        // Increase sensitivity: detect even partial/blurred hands
-        this.hands!.send({ image: video }).catch(reject);
+      this.currentDetectionPromise = { resolve, reject };
+      this.hands!.send({ image: video }).catch(reject);
     });
-
     await detectionWait;
 
-    if (!this.lastMPResults || !this.lastMPResults.multiHandLandmarks?.length) {
-      this.missingFrameCount++;
-      if (this.missingFrameCount > this.MISSING_FRAME_TOLERANCE) {
-        this.sequenceBuffer = []; // Only wipe after persistent loss
-        // Tracking is gone, so we cannot say the gesture *ended* — only that we
-        // no longer know. Reset without emitting an offset.
-        this.segmenter.reset();
-      }
-      return {
-        gestureName: "no hand",
-        gestureId: -1,
-        confidence: 0,
-        landmarks: null,
-        handedness: "unknown",
-        inferenceTimeMs: performance.now() - t0,
-        velocity: { x: 0, y: 0, z: 0 },
-        spatialIntent: "none",
-        rejected: true,
-        phase: "idle",
-        heldMs: 0,
-        segmentId: 0,
-      };
+    const mp = this.lastMPResults;
+    const detected: Landmark[][] = mp?.multiHandLandmarks ?? [];
+
+    if (detected.length === 0) {
+      for (const track of this.tracks.values()) track.markMissing();
+      return this.emptyResult(performance.now() - t0);
     }
 
-    const landmarks = this.lastMPResults.multiHandLandmarks[0] as Landmark[];
-    const handedness = (this.lastMPResults.multiHandedness?.[0]?.label.toLowerCase() || "unknown") as "left" | "right" | "unknown";
-
-    // 2. Feature Extraction & Buffering
-    this.pushFeatures(landmarks);
-
-    // 3. Temporal Classification (Transformer)
-    let gestureResult = { gestureId: -1, confidence: 0, rejected: true };
-
-    if (this.session && this.sequenceBuffer.length >= this.sequenceLength) {
-      const classification = await this.classifyGesture();
-      if (classification) {
-        gestureResult = classification;
-      }
-    }
-
-    const t1 = performance.now();
-
-    // 4. Custom gestures.
-    //
-    // These are consulted only when the trained model has *not* produced a
-    // confident answer. A user-taught k-NN class matched on a handful of
-    // examples should never outrank a calibrated model that scored 98% on a
-    // held-out split — it only fills the gap where that model abstains.
-    let finalGestureId = gestureResult.gestureId;
-    let finalConfidence = gestureResult.confidence;
-    let finalRejected = gestureResult.rejected;
-    let finalGestureName =
-      finalGestureId >= 0 ? (this.labels[finalGestureId] ?? "unknown") : "unknown";
-
-    if (finalRejected) {
-      const customMatch = this.matchCustomGesture(landmarks);
-      if (customMatch && customMatch.confidence > finalConfidence) {
-        finalGestureId = CUSTOM_GESTURE_ID;
-        finalConfidence = customMatch.confidence;
-        finalGestureName = customMatch.name;
-        // The k-NN match carries its own acceptance test (see
-        // `matchCustomGesture`), so reaching here means it passed.
-        finalRejected = false;
-      }
-    }
-
-    // 5. Dynamic Spatial Intent (Pinch/Swipe)
-    //
-    // Pinch is resolved below rather than here: an ungated distance test fires
-    // constantly while the hand is in motion, because the thumb and index pass
-    // close together during almost any travel. It is only meaningful once the
-    // hand has settled.
-    let spatialIntent: GestureResult["spatialIntent"] = "none";
-    const dist = dist3d(landmarks[4], landmarks[8]);
-
-    // 6. Calculate Velocity for Swipes (Hardened with Kinetic Momentum & Directional Lock)
-    const velocity = { x: 0, y: 0, z: 0 };
     const now = performance.now();
+    const results: HandResult[] = [];
+    const seen = new Set<Handedness>();
 
-    if (this.lastLandmarks && this.lastTimestamp > 0) {
-        const dt = (now - this.lastTimestamp) / 1000;
-        if (dt > 0) {
-            // Mirror-Aware Velocity: (User-Perspective)
-            const rawX = (this.lastLandmarks[0].x - landmarks[0].x) / dt;
-            const rawY = (landmarks[0].y - this.lastLandmarks[0].y) / dt;
-            
-            // 5-frame moving average to eliminate jitter
-            this.vBuffer.push({ x: rawX, y: rawY });
-            if (this.vBuffer.length > 5) this.vBuffer.shift();
-            
-            velocity.x = this.vBuffer.reduce((sum: number, v: { x: number; y: number }) => sum + v.x, 0) / this.vBuffer.length;
-            velocity.y = this.vBuffer.reduce((sum: number, v: { x: number; y: number }) => sum + v.y, 0) / this.vBuffer.length;
+    for (let i = 0; i < detected.length; i++) {
+      const landmarks = detected[i];
+      if (!landmarks || landmarks.length < 21) continue;
+
+      // MediaPipe reports handedness from the camera's point of view, which is
+      // mirrored relative to the user. Keeping its label as-is would mean the
+      // console's "left hand" is the user's right.
+      const raw = mp.multiHandedness?.[i]?.label?.toLowerCase();
+      const handedness: Handedness =
+        raw === "left" ? "right" : raw === "right" ? "left" : "unknown";
+
+      seen.add(handedness);
+      const track = this.track(handedness);
+
+      track.push(extractFeatures(landmarks), this.sequenceLength);
+
+      let gestureId = -1;
+      let confidence = 0;
+      let rejected = true;
+
+      if (this.session && track.isReady(this.sequenceLength)) {
+        const classification = await this.classify(track);
+        if (classification) {
+          gestureId = classification.gestureId;
+          confidence = classification.confidence;
+          rejected = classification.rejected;
         }
+      }
+
+      let gestureName =
+        gestureId >= 0 ? (this.labels[gestureId] ?? "unknown") : "unknown";
+
+      // Custom gestures fill the gap where the trained model abstains; they
+      // never outrank a confident prediction from it.
+      if (rejected) {
+        const custom = this.matchCustomGesture(landmarks);
+        if (custom && custom.confidence > confidence) {
+          gestureId = CUSTOM_GESTURE_ID;
+          gestureName = custom.name;
+          confidence = custom.confidence;
+          rejected = false;
+        }
+      }
+
+      const { velocity, spatialIntent } = track.motion(landmarks, now);
+      const segment = track.segmenter.push(
+        { gestureName, gestureId, confidence, rejected },
+        now
+      );
+
+      results.push({
+        handedness,
+        gestureName,
+        gestureId,
+        confidence,
+        rejected,
+        landmarks,
+        velocity,
+        spatialIntent,
+        phase: segment.phase,
+        heldMs: segment.heldMs,
+        segmentId: segment.segmentId,
+      });
     }
-    this.lastLandmarks = [...landmarks];
-    this.lastTimestamp = now;
 
-    // High-precision pinch detection (Gated by velocity)
-    const isStationary = Math.abs(velocity.x) < 0.1 && Math.abs(velocity.y) < 0.1;
-    if (isStationary) {
-        this.stationaryFrames += 1;
-    } else {
-        this.stationaryFrames = 0;
+    // Hands that exist as tracks but were not detected this frame.
+    for (const [handedness, track] of this.tracks) {
+      if (!seen.has(handedness)) track.markMissing();
     }
 
-    const isStableStationary = this.stationaryFrames > 10;
-    if (dist < 0.06 && isStableStationary) spatialIntent = "pinch_close";
-    else if (dist < 0.12 && isStableStationary) spatialIntent = "pinch_open";
-
-    // 5-frame moving average to eliminate jitter
-    this.pBuffer.push({ x: landmarks[0].x, y: landmarks[0].y });
-    if (this.pBuffer.length > 5) this.pBuffer.shift();
-
-    const firstP = this.pBuffer[0];
-    const lastP = this.pBuffer[this.pBuffer.length - 1];
-    const totalDX = lastP.x - firstP.x;
-    
-    // Multi-Tier Kinetic Logic (Industrial Grade)
-    const isHorizontalDominant = Math.abs(velocity.x) > (Math.abs(velocity.y) * 2.5);
-    const standardThreshold = 0.25;
-    const hyperThreshold = 0.85; // High-speed jump
-    const minDisplacement = 0.03;
-
-    if (isHorizontalDominant && Math.abs(totalDX) > minDisplacement) {
-        if (velocity.x < -hyperThreshold) spatialIntent = "hyper_left";
-        else if (velocity.x > hyperThreshold) spatialIntent = "hyper_right";
-        else if (velocity.x < -standardThreshold) spatialIntent = "swipe_left";
-        else if (velocity.x > standardThreshold) spatialIntent = "swipe_right";
+    if (results.length === 0) {
+      return this.emptyResult(performance.now() - t0);
     }
 
-    // 7. Segmentation.
-    //
-    // Everything above scores this frame in isolation. The segmenter converts
-    // that stream into discrete onset/hold/offset events, which is what any
-    // consumer binding a non-idempotent action actually needs.
-    const segment = this.segmenter.push(
-      {
-        gestureName: finalGestureName,
-        gestureId: finalGestureId,
-        confidence: finalConfidence,
-        rejected: finalRejected,
-      },
-      now
-    );
+    // The primary hand is the most confident accepted one, falling back to the
+    // first detected. Using detection order alone would let the top-level
+    // fields flicker between hands as MediaPipe reorders them.
+    const primary =
+      results.find((r) => !r.rejected) ??
+      results.reduce((a, b) => (b.confidence > a.confidence ? b : a));
 
     return {
-      gestureName: finalGestureName,
-      gestureId: finalGestureId,
-      confidence: finalConfidence,
-      landmarks,
-      handedness,
-      inferenceTimeMs: t1 - t0,
-      velocity,
-      spatialIntent,
-      rejected: finalRejected,
-      phase: segment.phase,
-      heldMs: segment.heldMs,
-      segmentId: segment.segmentId,
+      gestureName: primary.gestureName,
+      gestureId: primary.gestureId,
+      confidence: primary.confidence,
+      landmarks: primary.landmarks,
+      handedness: primary.handedness,
+      inferenceTimeMs: performance.now() - t0,
+      velocity: primary.velocity,
+      spatialIntent: primary.spatialIntent,
+      rejected: primary.rejected,
+      phase: primary.phase,
+      heldMs: primary.heldMs,
+      segmentId: primary.segmentId,
+      hands: results,
+      combo: this.buildCombo(results),
     };
   }
 
-  private missingFrameCount = 0;
-  private readonly MISSING_FRAME_TOLERANCE = 10;
+  /**
+   * Compose a two-handed pose from two accepted single-hand predictions.
+   *
+   * Returns null unless both hands are present and both were accepted — a pair
+   * built on a rejected half is not a two-handed gesture, it is one gesture and
+   * some noise.
+   */
+  private buildCombo(results: HandResult[]): TwoHandedCombo | null {
+    if (results.length < 2) return null;
+
+    const left = results.find((r) => r.handedness === "left");
+    const right = results.find((r) => r.handedness === "right");
+    if (!left || !right || left.rejected || right.rejected) return null;
+
+    const dx = left.landmarks[0].x - right.landmarks[0].x;
+    const dy = left.landmarks[0].y - right.landmarks[0].y;
+
+    return {
+      left: left.gestureName,
+      right: right.gestureName,
+      id: `${left.gestureName}+${right.gestureName}`,
+      confidence: Math.min(left.confidence, right.confidence),
+      separation: Math.sqrt(dx * dx + dy * dy),
+    };
+  }
+
+  /** Result for a frame in which no hand was recognised. */
+  private emptyResult(elapsedMs: number): GestureResult {
+    return {
+      gestureName: "no hand",
+      gestureId: -1,
+      confidence: 0,
+      landmarks: null,
+      handedness: "unknown",
+      inferenceTimeMs: elapsedMs,
+      velocity: { x: 0, y: 0, z: 0 },
+      spatialIntent: "none",
+      rejected: true,
+      phase: "idle",
+      heldMs: 0,
+      segmentId: 0,
+      hands: [],
+      combo: null,
+    };
+  }
 
   /**
    * Run ONNX inference on buffered features.
    */
-  private async classifyGesture(): Promise<{
+  private async classify(track: HandTrack): Promise<{
     gestureId: number;
     confidence: number;
     rejected: boolean;
   } | null> {
     if (!this.session) return null;
 
-    if (this.sequenceBuffer.length < this.sequenceLength) {
-      // Buffer not yet full: nothing to classify, and no claim to make.
+    if (!track.isReady(this.sequenceLength)) {
+      // Window not yet full: nothing to classify, and no claim to make.
       return { gestureId: -1, confidence: 0, rejected: true };
     }
 
-    // Build input tensor: (1, seq_len, feature_dim)
-    const inputData = new Float32Array(this.sequenceLength * FEATURE_DIM);
-    const recent = this.sequenceBuffer.slice(-this.sequenceLength);
-    for (let i = 0; i < this.sequenceLength; i++) {
-      inputData.set(recent[i], i * FEATURE_DIM);
-    }
-
+    const inputData = track.window(this.sequenceLength, FEATURE_DIM);
     const inputTensor = new ort.Tensor("float32", inputData, [
       1,
       this.sequenceLength,
@@ -693,79 +751,94 @@ export class GestureEngine {
   }
 
   /**
-   * Match current landmarks against custom gestures using a hardened K-NN approach.
-   * 
-   * Uses weighted Euclidean distance and Z-score normalization for industrial-grade
-   * biometric stability.
+   * Nearest-neighbour match against user-taught gestures.
+   *
+   * Stored samples are weighted the same way as the query, then compared by
+   * weighted Euclidean distance, with the nearest sample deciding the label.
+   * With a few dozen samples per gesture this is cheap and needs no training,
+   * which is what makes teaching a gesture instant.
    */
-  private matchCustomGesture(currentLandmarks: Landmark[]): { name: string, confidence: number } | null {
+  private matchCustomGesture(
+    currentLandmarks: Landmark[]
+  ): { name: string; confidence: number } | null {
     const customGestures = gestureStore.getGestures();
     if (customGestures.length === 0) return null;
 
-    const currentFeatures = extractFeatures(currentLandmarks);
-    const normalizedCurrent = this.normalizeFeatures(currentFeatures);
+    const query = this.weightFeatures(extractFeatures(currentLandmarks));
 
-    let bestMatch: { name: string, confidence: number } | null = null;
+    let bestMatch: { name: string; confidence: number } | null = null;
     let minDistance = Infinity;
 
     for (const gesture of customGestures) {
-      for (const sample of gesture.samples) {
-        const sampleFeatures = extractFeatures(sample);
-        const normalizedSample = this.normalizeFeatures(sampleFeatures);
-        
-        // Weighted distance calculation: give more weight to finger curl ratios (idx 71-75)
-        const distance = this.weightedEuclideanDistance(normalizedCurrent, normalizedSample);
-
+      for (const sample of this.storedFeatures(gesture.id, gesture.samples)) {
+        const distance = this.weightedEuclideanDistance(query, sample);
         if (distance < minDistance) {
           minDistance = distance;
           bestMatch = {
             name: gesture.name,
-            confidence: Math.max(0, Math.min(0.99, 1 - (distance / 4))) // Scaled confidence
+            // Distance-to-confidence is a heuristic mapping, not a calibrated
+            // probability. It is deliberately capped below 1 so a k-NN match
+            // can never present itself as more certain than the trained model.
+            confidence: Math.max(0, Math.min(0.99, 1 - distance / 4)),
           };
         }
       }
     }
 
-    return (bestMatch && bestMatch.confidence > 0.88) ? bestMatch : null;
+    return bestMatch && bestMatch.confidence > CUSTOM_MATCH_THRESHOLD
+      ? bestMatch
+      : null;
   }
 
-  private normalizeFeatures(features: Float32Array): Float32Array {
-    const normalized = new Float32Array(features.length);
-    for (let i = 0; i < features.length; i++) {
-        // Simple Min-Max normalization for spatial features (0-1 range)
-        // Hand-specific Z-score could be added here for even higher precision
-        normalized[i] = features[i];
-        
-        // Boost importance of curl ratios (indices 78 to 82 in the 86-dim vector)
-        if (i >= 78 && i <= 82) {
-            normalized[i] *= 2.0; 
-        }
+  /**
+   * Weighted feature vectors for a stored gesture, computed once and reused.
+   *
+   * Recomputing these per frame meant a user with ten taught gestures paid for
+   * ~400 feature extractions every frame, entirely to re-derive values that
+   * never change. The cache is keyed by gesture id and sample count, so editing
+   * or re-recording a gesture invalidates it.
+   */
+  private storedFeatures(id: string, samples: Landmark[][]): Float32Array[] {
+    const key = `${id}:${samples.length}`;
+    const cached = this.customFeatureCache.get(key);
+    if (cached) return cached;
+
+    const computed = samples.map((sample) =>
+      this.weightFeatures(extractFeatures(sample))
+    );
+    this.customFeatureCache.set(key, computed);
+    return computed;
+  }
+
+  private customFeatureCache = new Map<string, Float32Array[]>();
+
+  /**
+   * Emphasise the per-finger curl ratios before comparing.
+   *
+   * Curl carries most of what distinguishes one hand shape from another, while
+   * raw coordinates carry a lot of position and scale that a match should not
+   * depend on. Scaling those five dimensions up biases the distance toward
+   * shape.
+   */
+  private weightFeatures(features: Float32Array): Float32Array {
+    const out = new Float32Array(features.length);
+    out.set(features);
+    for (let i = CURL_FEATURE_START; i <= CURL_FEATURE_END; i++) {
+      out[i] *= CURL_WEIGHT;
     }
-    return normalized;
+    return out;
   }
 
   private weightedEuclideanDistance(a: Float32Array, b: Float32Array): number {
     let sum = 0;
     for (let i = 0; i < a.length; i++) {
       const diff = a[i] - b[i];
-      // Weights: fingertips and curl ratios are prioritized
-      const weight = (i >= 63) ? 2.0 : 1.0; 
-      sum += (diff * diff) * weight;
+      // Derived features (angles, distances, curls) discriminate shape better
+      // than the raw coordinates that precede them, so they count for more.
+      const weight = i >= 63 ? 2.0 : 1.0;
+      sum += diff * diff * weight;
     }
     return Math.sqrt(sum);
-  }
-
-  /**
-   * Add features to the temporal buffer.
-   */
-  private pushFeatures(landmarks: Landmark[]): void {
-    const features = extractFeatures(landmarks);
-    this.sequenceBuffer.push(features);
-    this.missingFrameCount = 0; // Reset on success
-
-    if (this.sequenceBuffer.length > this.sequenceLength * 2) {
-      this.sequenceBuffer = this.sequenceBuffer.slice(-this.sequenceLength);
-    }
   }
 
   /**
@@ -793,12 +866,7 @@ export class GestureEngine {
     this.hands = null;
     this.lastMPResults = null;
     this.currentDetectionPromise = null;
-    this.sequenceBuffer = [];
-    this.vBuffer = [];
-    this.pBuffer = [];
-    this.stationaryFrames = 0;
-    this.lastLandmarks = null;
-    this.segmenter.reset();
+    this.tracks.clear();
     this.isInitialized = false;
   }
 }

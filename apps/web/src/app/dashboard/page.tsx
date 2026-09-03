@@ -45,6 +45,17 @@ export default function Console() {
 
     const [isRunning, setIsRunning] = useState(false);
     const [bundleId, setBundleId] = useState<BundleId>("hagrid");
+    const [twoHanded, setTwoHanded] = useState(false);
+
+    // Read inside the camera-start callback, which must not re-create itself
+    // when this toggles — doing so tears the camera down mid-session.
+    const twoHandedRef = useRef(twoHanded);
+    useEffect(() => {
+        twoHandedRef.current = twoHanded;
+        // Applied live: MediaPipe accepts a new hand count without a restart,
+        // so there is no reason to make the user stop the camera for it.
+        void engineRef.current?.setMaxHands(twoHanded ? 2 : 1);
+    }, [twoHanded]);
     const [vocabulary, setVocabulary] = useState<string[]>([]);
     const [gesture, setGesture] = useState<GestureResult | null>(null);
     const [fps, setFps] = useState(0);
@@ -92,6 +103,7 @@ export default function Console() {
             const engine = new GestureEngine();
             const bundle = MODEL_BUNDLES.find((b) => b.id === bundleId) ?? MODEL_BUNDLES[0];
             await engine.initialize(bundle.url);
+            await engine.setMaxHands(twoHandedRef.current ? 2 : 1);
             engineRef.current = engine;
             setVocabulary(engine.getLabels());
 
@@ -152,7 +164,15 @@ export default function Console() {
         }
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        if (!result.landmarks || result.landmarks.length < 10) return;
+        // Draw every tracked hand. Rendering only the primary would leave the
+        // second hand's skeleton missing while it is still driving recognition,
+        // which reads as a tracking failure rather than a display choice.
+        const hands = result.hands.length > 0
+            ? result.hands
+            : result.landmarks
+                ? [{ landmarks: result.landmarks, rejected: result.rejected }]
+                : [];
+        if (hands.length === 0) return;
 
         const CONNECTIONS = [
             [0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8],
@@ -167,37 +187,47 @@ export default function Console() {
             y: p.y * canvas.height,
         });
 
-        ctx.strokeStyle = "#ffb627";
-        ctx.lineWidth = 2;
-        ctx.lineCap = "round";
-        ctx.beginPath();
-        for (const [i, j] of CONNECTIONS) {
-            const a = result.landmarks[i];
-            const b = result.landmarks[j];
-            if (!a || !b) continue;
-            const pa = px(a);
-            const pb = px(b);
-            ctx.moveTo(pa.x, pa.y);
-            ctx.lineTo(pb.x, pb.y);
-        }
-        ctx.stroke();
-
         const tips = new Set([4, 8, 12, 16, 20]);
-        result.landmarks.forEach((p, i) => {
-            const c = px(p);
+
+        for (const hand of hands) {
+            const landmarks = hand.landmarks;
+            if (!landmarks || landmarks.length < 21) continue;
+
+            // A rejected hand is still tracked, just not classified. Dimming it
+            // says so, rather than implying the same confidence as an accepted one.
+            const colour = hand.rejected ? "#605e58" : "#ffb627";
+
+            ctx.strokeStyle = colour;
+            ctx.lineWidth = 2;
+            ctx.lineCap = "round";
             ctx.beginPath();
-            ctx.arc(c.x, c.y, i === 0 ? 5 : tips.has(i) ? 4 : 2.5, 0, Math.PI * 2);
-            if (i === 0 || tips.has(i)) {
-                ctx.fillStyle = "#ffb627";
-                ctx.fill();
-            } else {
-                ctx.fillStyle = "#0a0a0b";
-                ctx.fill();
-                ctx.strokeStyle = "#ffb627";
-                ctx.lineWidth = 1.2;
-                ctx.stroke();
+            for (const [i, j] of CONNECTIONS) {
+                const a = landmarks[i];
+                const b = landmarks[j];
+                if (!a || !b) continue;
+                const pa = px(a);
+                const pb = px(b);
+                ctx.moveTo(pa.x, pa.y);
+                ctx.lineTo(pb.x, pb.y);
             }
-        });
+            ctx.stroke();
+
+            landmarks.forEach((p, i) => {
+                const c = px(p);
+                ctx.beginPath();
+                ctx.arc(c.x, c.y, i === 0 ? 5 : tips.has(i) ? 4 : 2.5, 0, Math.PI * 2);
+                if (i === 0 || tips.has(i)) {
+                    ctx.fillStyle = colour;
+                    ctx.fill();
+                } else {
+                    ctx.fillStyle = "#0a0a0b";
+                    ctx.fill();
+                    ctx.strokeStyle = colour;
+                    ctx.lineWidth = 1.2;
+                    ctx.stroke();
+                }
+            });
+        }
     }, []);
 
     useEffect(() => {
@@ -248,7 +278,12 @@ export default function Console() {
                             // Bound actions fire on segment onset only. The
                             // registry enforces that, but the log below must
                             // also only record real dispatches.
-                            const fired = actionRegistry.dispatch(result);
+                            // A combo takes precedence: when two hands form a
+                            // bound pair, firing the single-hand binding as
+                            // well would run two actions for one intent.
+                            const fired =
+                                actionRegistry.dispatchCombo(result) ??
+                                actionRegistry.dispatch(result);
                             if (fired) {
                                 hapticEngine.pulse("light");
                                 setRecentActions((log) =>
@@ -424,6 +459,19 @@ export default function Console() {
                                         </button>
                                     );
                                 })}
+                                <button
+                                    onClick={() => setTwoHanded((v) => !v)}
+                                    className="border px-3 py-1.5 label transition-colors"
+                                    style={{
+                                        borderRadius: 2,
+                                        borderColor: twoHanded ? "var(--signal)" : "var(--rule-strong)",
+                                        color: twoHanded ? "var(--signal)" : "var(--ink-3)",
+                                        background: twoHanded ? "var(--signal-4)" : "transparent",
+                                    }}
+                                    title="Track both hands. Roughly doubles landmark-detection cost."
+                                >
+                                    {twoHanded ? "2 hands" : "1 hand"}
+                                </button>
                             </div>
                         </div>
 
@@ -459,8 +507,50 @@ export default function Console() {
                                     {detected && (
                                         <p className="readout mt-1 text-xs text-[var(--ink-2)]">
                                             {gesture!.confidence.toFixed(3)} · {gesture!.handedness}
+                                            {gesture!.phase !== "idle" && ` · ${gesture!.phase}`}
                                         </p>
                                     )}
+
+                                    {/* Two-handed pair, when one is formed */}
+                                    {gesture?.combo && (
+                                        <div className="mt-3 border-l-2 border-[var(--signal)] pl-3">
+                                            <span className="label label-signal">Combo</span>
+                                            <p className="mono mt-1 text-sm text-[var(--ink)]">
+                                                {gesture.combo.left.replace(/_/g, " ")}
+                                                {" + "}
+                                                {gesture.combo.right.replace(/_/g, " ")}
+                                            </p>
+                                            <p className="readout text-[10px] text-[var(--ink-3)]">
+                                                {gesture.combo.confidence.toFixed(3)} · sep{" "}
+                                                {gesture.combo.separation.toFixed(3)}
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* Per-hand readout, only meaningful with two hands */}
+                            {isRunning && (gesture?.hands.length ?? 0) > 1 && (
+                                <div className="absolute right-4 top-4 border border-[var(--rule)] bg-[var(--field)]/85 px-3 py-2">
+                                    <span className="label">Hands</span>
+                                    {gesture!.hands.map((h) => (
+                                        <div
+                                            key={h.handedness}
+                                            className="mt-1.5 flex items-baseline justify-between gap-4"
+                                        >
+                                            <span className="label">{h.handedness}</span>
+                                            <span
+                                                className="mono text-[11px]"
+                                                style={{
+                                                    color: h.rejected
+                                                        ? "var(--ink-3)"
+                                                        : "var(--signal)",
+                                                }}
+                                            >
+                                                {h.rejected ? "—" : h.gestureName.replace(/_/g, " ")}
+                                            </span>
+                                        </div>
+                                    ))}
                                 </div>
                             )}
 
