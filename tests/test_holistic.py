@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from core.landmarks.holistic_features import (
+    FACE_BLOCK_DIM,
     HAND_BLOCK_DIM,
     POSE_BLOCK_DIM,
     HolisticFeatureExtractor,
@@ -13,6 +14,7 @@ from core.landmarks.holistic_features import (
 from core.types import Handedness, HandLandmarks
 from core.vision.holistic_detector import (
     LEFT_SHOULDER,
+    NUM_FACE_KEY_POINTS,
     NUM_POSE_LANDMARKS,
     RIGHT_SHOULDER,
     HolisticResult,
@@ -40,8 +42,14 @@ def _pose(shoulder_span: float = 0.4) -> np.ndarray:
 class TestHolisticFeatures:
     def test_feature_dim_layout(self) -> None:
         fx = HolisticFeatureExtractor()
-        assert fx.feature_dim == HAND_BLOCK_DIM * 2 + POSE_BLOCK_DIM + 1
-        assert fx.feature_dim == 208
+        # Two hands, upper-body pose and its presence flag, then the face key
+        # points and theirs. The face block is always allocated even when face
+        # tracking is off, so the width never depends on runtime configuration.
+        assert (
+            fx.feature_dim
+            == HAND_BLOCK_DIM * 2 + POSE_BLOCK_DIM + 1 + FACE_BLOCK_DIM + 1
+        )
+        assert fx.feature_dim == 254
 
     def test_empty_result_is_all_zeros(self) -> None:
         fx = HolisticFeatureExtractor()
@@ -79,8 +87,51 @@ class TestHolisticFeatures:
         without = fx.extract(HolisticResult())
         with_pose = fx.extract(HolisticResult(pose=_pose(), shoulder_span=0.4))
 
+        pose_flag = HAND_BLOCK_DIM * 2 + POSE_BLOCK_DIM
+        assert without[pose_flag] == 0.0
+        assert with_pose[pose_flag] == 1.0
+
+    def test_face_presence_flag(self) -> None:
+        fx = HolisticFeatureExtractor()
+        without = fx.extract(HolisticResult(pose=_pose(), shoulder_span=0.4))
+        with_face = fx.extract(
+            HolisticResult(
+                pose=_pose(),
+                shoulder_span=0.4,
+                face=np.full((NUM_FACE_KEY_POINTS, 3), 0.5, dtype=np.float32),
+            )
+        )
+
         assert without[-1] == 0.0
-        assert with_pose[-1] == 1.0
+        assert with_face[-1] == 1.0
+
+    def test_face_block_is_zero_when_face_tracking_is_off(self) -> None:
+        # Face tracking is opt-in, and a model trained without it must see
+        # zeros there rather than stale or invented coordinates.
+        fx = HolisticFeatureExtractor()
+        features = fx.extract(HolisticResult(pose=_pose(), shoulder_span=0.4))
+        face_base = HAND_BLOCK_DIM * 2 + POSE_BLOCK_DIM + 1
+        assert not features[face_base:].any()
+
+    def test_face_is_relative_to_the_shoulder_midpoint(self) -> None:
+        # Non-manual markers are small movements near the head; without body-
+        # relative normalisation they would be swamped by where the signer
+        # happens to stand in frame.
+        fx = HolisticFeatureExtractor()
+        pose = _pose(shoulder_span=0.4)
+        midpoint = (pose[LEFT_SHOULDER] + pose[RIGHT_SHOULDER]) / 2.0
+
+        features = fx.extract(
+            HolisticResult(
+                pose=pose,
+                shoulder_span=0.4,
+                face=np.tile(midpoint, (NUM_FACE_KEY_POINTS, 1)).astype(np.float32),
+            )
+        )
+        face_base = HAND_BLOCK_DIM * 2 + POSE_BLOCK_DIM + 1
+        np.testing.assert_allclose(
+            features[face_base : face_base + FACE_BLOCK_DIM], 0.0, atol=1e-6
+        )
 
     def test_position_is_relative_to_shoulder_midpoint(self) -> None:
         """A hand at the shoulder midpoint must encode as position zero."""

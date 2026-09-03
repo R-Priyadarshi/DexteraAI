@@ -27,6 +27,7 @@ from core.landmarks.normalizer import LandmarkNormalizer, NormalizationMode
 from core.types import Handedness
 from core.vision.holistic_detector import (
     LEFT_SHOULDER,
+    NUM_FACE_KEY_POINTS,
     RIGHT_SHOULDER,
     UPPER_BODY_INDICES,
 )
@@ -38,8 +39,10 @@ if TYPE_CHECKING:
 HAND_BLOCK_DIM = 86 + 3 + 1
 # Upper body: 9 landmarks x 3 coords, relative and scaled
 POSE_BLOCK_DIM = len(UPPER_BODY_INDICES) * 3
-# Both hands + pose + a pose-presence flag
-HOLISTIC_FEATURE_DIM = HAND_BLOCK_DIM * 2 + POSE_BLOCK_DIM + 1
+# Face-mesh key points x 3 coords, relative and scaled
+FACE_BLOCK_DIM = NUM_FACE_KEY_POINTS * 3
+# Both hands + pose + a pose-presence flag + face + a face-presence flag
+HOLISTIC_FEATURE_DIM = HAND_BLOCK_DIM * 2 + POSE_BLOCK_DIM + 1 + FACE_BLOCK_DIM + 1
 
 
 class HolisticFeatureExtractor:
@@ -49,17 +52,25 @@ class HolisticFeatureExtractor:
     become zeros plus a presence flag rather than a shorter vector. The model
     then learns to read the flags instead of being fed ragged input.
 
-    Layout (total = 265):
+    Layout:
         [0:90]     left hand:  86 shape + 3 position + 1 presence
         [90:180]   right hand: 86 shape + 3 position + 1 presence
         [180:207]  upper-body pose: 9 landmarks x 3
         [207]      pose presence flag
+        [208:253]  face key points: 15 landmarks x 3   (when track_face)
+        [253]      face presence flag
+
+    The face block is always allocated, even when face tracking is off, so the
+    feature width is a property of the extractor rather than of whatever the
+    detector happened to be configured with. A width that changed with runtime
+    configuration would silently produce a model whose input shape depends on a
+    flag set somewhere else entirely.
 
     Usage:
         >>> extractor = HolisticFeatureExtractor()
         >>> features = extractor.extract(holistic_result)
         >>> features.shape
-        (208,)
+        (254,)
     """
 
     def __init__(self, normalization_mode: NormalizationMode = NormalizationMode.FULL) -> None:
@@ -69,7 +80,7 @@ class HolisticFeatureExtractor:
     @property
     def feature_dim(self) -> int:
         """Total feature width."""
-        return HAND_BLOCK_DIM * 2 + POSE_BLOCK_DIM + 1
+        return HOLISTIC_FEATURE_DIM
 
     def extract(self, result: HolisticResult) -> np.ndarray:
         """Extract a fixed-width feature vector for one frame."""
@@ -99,6 +110,18 @@ class HolisticFeatureExtractor:
                 (selected - origin) / scale
             ).flatten()
             features[pose_base + POSE_BLOCK_DIM] = 1.0  # pose presence
+
+        # ── Face (non-manual markers) ────────────────────────
+        # ASL marks yes/no questions with raised brows, wh-questions with
+        # lowered brows, and negation and degree with the mouth. Those are
+        # grammar, not decoration, so a word-level model that cannot see them
+        # has a ceiling no amount of hand data lifts.
+        face_base = pose_base + POSE_BLOCK_DIM + 1
+        if result.face is not None:
+            features[face_base : face_base + FACE_BLOCK_DIM] = (
+                (result.face - origin) / scale
+            ).flatten()
+            features[face_base + FACE_BLOCK_DIM] = 1.0  # face presence
 
         return features
 

@@ -55,6 +55,32 @@ NUM_POSE_LANDMARKS = 33
 
 # Upper-body landmarks that matter for signing; the legs contribute nothing and
 # are dropped to keep the feature vector small.
+# Face-mesh points carrying ASL non-manual markers.
+#
+# The mesh is 478 points, almost all of which say nothing about grammar. ASL
+# marks yes/no questions with raised brows, wh-questions with lowered brows, and
+# negation and degree with mouth shape, so a small subset around the brows, eyes
+# and mouth captures what matters. Taking the whole mesh would bury ~40 hand
+# dimensions under ~1400 face dimensions and make the hands the minority signal
+# in a hand-centric task.
+FACE_KEY_POINTS: tuple[int, ...] = (
+    55, 65, 52, 285, 295, 282,   # brows: inner, mid, outer (left, then right)
+    159, 145, 386, 374,          # eyes: upper and lower lids
+    61, 291, 13, 14,             # mouth: corners, upper and lower lip centres
+    1,                           # nose tip, a stable facial anchor
+)
+NUM_FACE_KEY_POINTS = len(FACE_KEY_POINTS)
+
+FACE_LANDMARKER_URL = (
+    "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
+    "face_landmarker/float16/1/face_landmarker.task"
+)
+
+DEFAULT_FACE_MODEL_PATHS = (
+    "models/mediapipe/face_landmarker.task",
+    "~/.cache/dextera/face_landmarker.task",
+)
+
 UPPER_BODY_INDICES = (
     0,   # nose
     11,  # left shoulder
@@ -103,6 +129,38 @@ def resolve_pose_landmarker_path(model_path: str | Path | None = None) -> Path:
     )
 
 
+def resolve_face_landmarker_path(model_path: str | Path | None = None) -> Path:
+    """Locate the face_landmarker task bundle.
+
+    Raises:
+        FileNotFoundError: With download instructions if no bundle is found.
+    """
+    # An explicit path is authoritative: falling back to a different bundle
+    # would silently run a model the caller did not ask for.
+    if model_path:
+        explicit = Path(model_path).expanduser()
+        if explicit.is_file():
+            return explicit
+        raise FileNotFoundError(f"Model bundle not found at the given path: {explicit}")
+
+    candidates: list[Path] = []
+    env_path = os.environ.get("DEXTERA_FACE_LANDMARKER")
+    if env_path:
+        candidates.append(Path(env_path).expanduser())
+    candidates.extend(Path(p).expanduser() for p in DEFAULT_FACE_MODEL_PATHS)
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+
+    raise FileNotFoundError(
+        "MediaPipe face_landmarker task not found. Run `make fetch-models`, or:\n"
+        f"  curl -sL -o {DEFAULT_FACE_MODEL_PATHS[0]} \\\n"
+        f"    {FACE_LANDMARKER_URL}\n"
+        f"Searched: {', '.join(str(c) for c in candidates)}"
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class HolisticResult:
     """Hands plus upper-body pose for one frame.
@@ -112,17 +170,24 @@ class HolisticResult:
         pose: (33, 3) pose landmarks, or None when no body was found.
         shoulder_span: Distance between shoulders in normalized image units,
             used as the scale reference. 0.0 when unavailable.
+        face: (NUM_FACE_KEY_POINTS, 3) landmarks carrying non-manual markers,
+            or None when no face was found or face tracking is disabled.
         inference_time_ms: Combined detection latency.
     """
 
     hands: list[HandLandmarks] = field(default_factory=list)
     pose: np.ndarray | None = None
     shoulder_span: float = 0.0
+    face: np.ndarray | None = None
     inference_time_ms: float = 0.0
 
     @property
     def has_pose(self) -> bool:
         return self.pose is not None
+
+    @property
+    def has_face(self) -> bool:
+        return self.face is not None
 
 
 class MediaPipeHolisticDetector:
@@ -143,12 +208,24 @@ class MediaPipeHolisticDetector:
         static_image_mode: bool = False,
         hand_model_path: str | Path | None = None,
         pose_model_path: str | Path | None = None,
+        track_face: bool = False,
+        face_model_path: str | Path | None = None,
     ) -> None:
+        """Initialize the holistic detector.
+
+        Args:
+            track_face: Also detect the face-mesh points carrying ASL
+                non-manual markers. Off by default because it costs a third
+                model per frame and is only needed for the word-level
+                sign-language track — fingerspelling and general gestures
+                gain nothing from it.
+        """
         self._static_image_mode = static_image_mode
         self._last_inference_ms = 0.0
         self._frame_index = 0
         self._closed = False
         self._pose_landmarker: Any = None
+        self._face_landmarker: Any = None
 
         self._hand_detector = MediaPipeHandDetector(
             max_hands=max_hands,
@@ -171,6 +248,19 @@ class MediaPipeHolisticDetector:
             min_tracking_confidence=min_tracking_confidence,
         )
         self._pose_landmarker = mp_vision.PoseLandmarker.create_from_options(options)
+
+        if track_face:
+            face_bundle = resolve_face_landmarker_path(face_model_path)
+            self._face_landmarker = mp_vision.FaceLandmarker.create_from_options(
+                mp_vision.FaceLandmarkerOptions(
+                    base_options=mp_python.BaseOptions(model_asset_path=str(face_bundle)),
+                    running_mode=running_mode,
+                    num_faces=1,
+                    min_face_detection_confidence=min_detection_confidence,
+                    min_face_presence_confidence=min_detection_confidence,
+                    min_tracking_confidence=min_tracking_confidence,
+                )
+            )
 
     @property
     def last_inference_ms(self) -> float:
@@ -200,11 +290,15 @@ class MediaPipeHolisticDetector:
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(rgb))
 
+        # Computed once and shared: pose and face run in the same running mode,
+        # and giving them different timestamps for the same frame would break
+        # video-mode tracking in whichever one fell behind.
+        timestamp_ms = int(time.perf_counter() * 1000.0) + self._frame_index
+        self._frame_index += 1
+
         if self._static_image_mode:
             pose_result = self._pose_landmarker.detect(mp_image)
         else:
-            timestamp_ms = int(time.perf_counter() * 1000.0) + self._frame_index
-            self._frame_index += 1
             pose_result = self._pose_landmarker.detect_for_video(mp_image, timestamp_ms)
 
         pose: np.ndarray | None = None
@@ -221,12 +315,34 @@ class MediaPipeHolisticDetector:
             else:
                 pose = None
 
+        face: np.ndarray | None = None
+        if self._face_landmarker is not None:
+            if self._static_image_mode:
+                face_result = self._face_landmarker.detect(mp_image)
+            else:
+                face_result = self._face_landmarker.detect_for_video(
+                    mp_image, timestamp_ms
+                )
+            if face_result.face_landmarks:
+                mesh = face_result.face_landmarks[0]
+                # Guard the indices: the mesh size differs between model
+                # variants, and an out-of-range point would raise mid-frame.
+                if max(FACE_KEY_POINTS) < len(mesh):
+                    face = np.array(
+                        [
+                            [mesh[i].x, mesh[i].y, mesh[i].z]
+                            for i in FACE_KEY_POINTS
+                        ],
+                        dtype=np.float32,
+                    )
+
         self._last_inference_ms = (time.perf_counter() - t_start) * 1000.0
 
         return HolisticResult(
             hands=hands,
             pose=pose,
             shoulder_span=shoulder_span,
+            face=face,
             inference_time_ms=self._last_inference_ms,
         )
 
@@ -237,6 +353,9 @@ class MediaPipeHolisticDetector:
         self._closed = True
         with contextlib.suppress(Exception):
             self._hand_detector.close()
+        if self._face_landmarker is not None:
+            with contextlib.suppress(Exception):
+                self._face_landmarker.close()
         if self._pose_landmarker is not None:
             with contextlib.suppress(Exception):
                 self._pose_landmarker.close()
