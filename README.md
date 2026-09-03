@@ -162,12 +162,19 @@ Full walkthrough in [ONBOARDING.md](ONBOARDING.md).
 Measured on this repo's own hardware, not targets. Numbers vary widely by device,
 so measure on yours before quoting any of them.
 
+The ONNX figures below were re-measured after fixing an inverted padding mask in
+the benchmark and eval paths: both marked every frame as padding, so the encoder
+attended to nothing and the old numbers timed a degenerate case. **Browser
+latency is not listed, because it has not been measured on real hardware** —
+figures from a headless software rasteriser would be meaningless, and the WebGPU
+path is unavailable there by construction.
+
 | Stage | Cost | Notes |
 |---|---|---|
 | MediaPipe hand detection | ~47 ms p50, ~84 ms p95 | CPU, 720p frame. Dominates the pipeline. |
 | Normalize + feature extraction | ~0.7 ms | CPU |
 | Transformer classification (PyTorch) | ~0.1 ms | CPU, 30x86 window |
-| Transformer classification (ONNX Runtime) | 1.25 ms p50, 2.04 ms p95 | CPU, includes session overhead |
+| Transformer classification (ONNX Runtime) | 0.74 ms p50, 1.11 ms p95 | CPU, includes session overhead |
 | Model size | 2.1 MB fp32 | ~551k parameters |
 
 ### Accuracy
