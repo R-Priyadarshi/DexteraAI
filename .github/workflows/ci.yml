@@ -139,7 +139,17 @@ jobs:
       # nor the log (which needs admin rights to download) tells you which test
       # died. The wrapper republishes the crash tail as an annotation.
       - name: Tests
-        run: bash scripts/run_tests_ci.sh tests/ -m "not slow and not gpu and not benchmark" --tb=short
+        run: bash scripts/run_tests_ci.sh tests/ --ignore=tests/test_api.py -m "not slow and not gpu and not benchmark" --tb=short
+
+      # Separate step, and `always()` so it runs even when the step above
+      # failed. These boot the real app and construct native resources, so a
+      # hard crash here takes the process down with it — and when they shared a
+      # step, that reported nothing about the ~150 tests that never got to run.
+      # macOS was red for two rounds before it was clear that only this module
+      # was involved.
+      - name: API tests
+        if: always()
+        run: bash scripts/run_tests_ci.sh tests/test_api.py -m "not slow and not gpu and not benchmark" --tb=short
 
   smoke:
     name: End-to-end wiring

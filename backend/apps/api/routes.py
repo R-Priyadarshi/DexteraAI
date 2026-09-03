@@ -71,14 +71,21 @@ def _get_pipeline() -> GesturePipeline:
 async def health_check(
     settings: Settings = Depends(get_settings),
 ) -> HealthResponse:
-    """Liveness / readiness probe."""
+    """Liveness / readiness probe.
+
+    Deliberately does not build the pipeline. A probe reports state; it does not
+    create it. This used to call `_get_pipeline()`, which constructs MediaPipe,
+    loads the checkpoint and calls `start()` — so the container HEALTHCHECK
+    booted the very thing it was meant to be reporting on, the first probe paid
+    for that, and a pipeline that failed to construct took down the one endpoint
+    whose job is to say something is wrong.
+    """
     from backend.apps.api.main import get_uptime
 
-    pipeline = _get_pipeline()
     return HealthResponse(
         status="healthy",
         version=settings.app_version,
-        pipeline_running=pipeline.is_running,
+        pipeline_running=_pipeline is not None and _pipeline.is_running,
         uptime_seconds=round(get_uptime(), 2),
     )
 

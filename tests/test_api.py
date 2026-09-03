@@ -56,9 +56,27 @@ class TestHealth:
     def test_health_payload(self, client: TestClient) -> None:
         body = client.get("/api/health").json()
         assert body["status"] == "healthy"
-        assert body["pipeline_running"] is True
+        assert isinstance(body["pipeline_running"], bool)
         assert "version" in body
         assert body["privacy"] == "all-inference-on-device"
+
+    def test_health_does_not_build_the_pipeline(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A probe reports state; it must not create it.
+
+        This was previously the reverse, and the cost was not theoretical: the
+        probe constructed MediaPipe, and on macOS that aborted the process
+        (SIGABRT) on the first request, so the API's liveness endpoint was the
+        single thing keeping the platform red.
+        """
+        import backend.apps.api.routes as routes
+
+        monkeypatch.setattr(routes, "_pipeline", None)
+        body = client.get("/api/health").json()
+
+        assert body["pipeline_running"] is False
+        assert routes._pipeline is None, "health probe constructed the pipeline"
 
     def test_health_path_matches_dockerfile_healthcheck(self) -> None:
         """The container HEALTHCHECK must point at a path that exists."""
