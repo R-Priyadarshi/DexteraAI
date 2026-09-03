@@ -18,7 +18,15 @@ dependencies = [
     # added a hard libEGL/libGLESv2 system requirement and broke every headless
     # install — CI and the Docker image both. The cap does not prevent that
     # inside a major, but it stops the next one arriving without a decision.
-    "mediapipe>=0.10.14,<2",
+    "mediapipe>=0.10.14,<2; sys_platform != 'darwin'",
+    # macOS is held below 1.0. MediaPipe 1.0 moved the vision tasks onto a new C
+    # API, and on macOS arm64 that aborts the process (SIGABRT) from inside its
+    # own dispatch thread the moment a detector runs — not at import, not at
+    # construction, but on first use, so nothing catches it. Every test that
+    # touches a detector dies; the ~150 that do not all pass. 0.10.21 predates
+    # that C API and ships a universal2 wheel, so it covers both Apple Silicon
+    # and Intel. Note it has no cp313 wheel: macOS needs Python 3.11 or 3.12.
+    "mediapipe>=0.10.14,<1.0; sys_platform == 'darwin'",
     "torch>=2.3.0",
     "onnx>=1.16.0",
     "onnxruntime>=1.18.0",
