@@ -192,10 +192,15 @@ See `/apps/web`, `/apps/mobile`, `/apps/desktop` for starter templates.
 Earlier drafts of this document listed endpoints for plugins, retraining, cloud/edge sync,
 multimodal ingest, notifications, custom gestures, integrations, analytics, and RBAC.
 
-**None of those are mounted.** The application only serves the three endpoints above.
-The sketches for them live in `backend/experimental/` and are not importable by the app.
-Several contain security defects (path traversal, SSRF) and none have authentication.
-See `backend/experimental/README.md` before considering any of them.
+**None of those are mounted, and the sketches have now been deleted.** The application
+serves only the three endpoints above. Several of the sketches contained security defects
+(path traversal, SSRF) and none had authentication, so leaving them in the tree was a
+liability even unreachable. `backend/experimental/README.md` records what they were, what
+was wrong with each, and how to recover them from git history.
+
+Two of them have since been answered without a server: custom-gesture sync is handled by
+gesture packs (a JSON export that imports on another machine), and plugins are TypeScript
+objects registered at startup rather than records in a server registry.
 
 The product runs inference on-device; the API server is an optional convenience for demos
 and integration tests, not the primary delivery path.

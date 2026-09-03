@@ -1,46 +1,62 @@
-# Experimental / Unmounted API Routers
+# Removed: unmounted API router sketches
 
-**Status: not part of the product. Not wired into the running app. Do not mount as-is.**
+**This directory holds no code. It exists to record what was here and why it went.**
 
-These modules were written as sketches of possible server-side features. None of them
-were ever included in `create_app()` (`backend/apps/api/main.py`), so none of them have
-ever been reachable over HTTP. They were moved here out of `backend/apps/api/` so that
-the live API surface is exactly what the app actually serves:
+Nine router modules — `analytics.py`, `custom_gestures.py`, `integrations.py`,
+`multimodal.py`, `notifications.py`, `plugins.py`, `rbac.py`, `retraining.py`
+and `sync.py` — were sketches of possible server-side features. None was ever
+included in `create_app()`, so none was ever reachable over HTTP. They were
+first quarantined here, then deleted.
 
-| Live endpoint | Source |
+They are in git history if you ever want them back:
+
+```bash
+git log --oneline --diff-filter=D -- backend/experimental/
+git show <commit>^:backend/experimental/sync.py
+```
+
+## Why deleted rather than kept
+
+Unreachable code with security defects is still a liability. It gets mounted by
+someone in a hurry, it trips security scanners, and it makes the API surface
+look larger than it is. Each of these had a blocking problem:
+
+| File | Problem |
+|---|---|
+| `sync.py` | **Path traversal.** Request `filename` passed straight to `os.path.join`, so `../../` escaped the sync directory on both upload and download. |
+| `custom_gestures.py` | **Path traversal.** `name` interpolated into a file path for create and delete, allowing writes and deletes outside the intended directory. |
+| `integrations.py` | **SSRF.** Unauthenticated endpoint POSTed to an arbitrary caller-supplied URL. Also imported `requests`, an undeclared dependency, so it failed at import time. |
+| `rbac.py` | Implied access control, enforced nothing. Module-level dict of users and roles, no authentication, no other route consulting it. Worse than no RBAC, because it looked like protection. |
+| `analytics.py` | Returned hardcoded fake numbers (`active_users: 5`, `gestures_recognized: 1200`). |
+| `retraining.py` | `retrain_model()` was `time.sleep(5)`. Trained nothing. |
+| `plugins.py`, `notifications.py`, `multimodal.py` | In-memory registries with no persistence, no auth, and no consumer. |
+
+Common to all: no authentication, no rate limiting, no input validation, no
+tests, and process-local mutable state that would not survive a restart or work
+across more than one worker.
+
+## What the app actually serves
+
+| Endpoint | Source |
 |---|---|
 | `GET /api/health` | `backend/apps/api/routes.py` |
 | `POST /api/predict` | `backend/apps/api/routes.py` |
 | `WS /api/ws/stream` | `backend/apps/api/routes.py` |
 
-DexteraAI runs inference **on-device**. The API server is optional and exists for demos
-and integration testing, so the product does not need most of what is sketched here.
+## Before adding any of this back
 
-## Why these are not simply enabled
+DexteraAI runs inference **on-device**, and the API server is an optional
+convenience for demos and integration tests — not the delivery path. A feature
+that can run in the browser should.
 
-Each has blocking problems that must be fixed before it could be exposed to a network:
+Two of these have since been answered without a server at all:
 
-| File | Problem |
-|---|---|
-| `sync.py` | **Path traversal.** `filename` from the request is passed straight to `os.path.join`, so `../../` escapes the sync directory on both upload and download. |
-| `custom_gestures.py` | **Path traversal.** The `name` parameter is interpolated into a file path for create and delete, allowing writes and deletes outside the intended directory. |
-| `integrations.py` | **SSRF.** Unauthenticated endpoint POSTs to an arbitrary caller-supplied URL. Also imports `requests`, which is not a declared dependency, so it fails at import time. |
-| `rbac.py` | Implies access control but enforces nothing. Users and roles live in a module-level dict, there is no authentication, and no other route consults it. Worse than no RBAC, because it looks like protection. |
-| `analytics.py` | Returns hardcoded fake numbers (`active_users: 5`, `gestures_recognized: 1200`). |
-| `retraining.py` | `retrain_model()` is a `time.sleep(5)` stub that trains nothing. |
-| `plugins.py`, `notifications.py`, `multimodal.py` | In-memory registries with no persistence, no auth, and no consumer. |
+- **Custom gesture sync** → gesture packs. Studio exports taught gestures as a
+  JSON file of landmark coordinates that imports on another machine. No
+  account, no upload, no endpoint.
+- **Plugins** → `apps/web/src/lib/plugin-engine.ts`. A plugin is a TypeScript
+  object registered at startup, not a record in a server registry.
 
-Common to all of them: no authentication, no rate limiting, no input validation, no
-tests, and process-local mutable state that would not survive a restart or work across
-more than one worker.
-
-## If you want one of these for real
-
-1. Decide it belongs server-side at all. On-device is the default for this project, and
-   a feature that can run in the browser should.
-2. Fix the security issue in the table above first.
-3. Add authentication and validated request/response models in `backend/apps/api/schemas.py`.
-4. Add tests under `tests/`.
-5. Mount it in `create_app()` and document it in `docs/api-reference.md`.
-
-Until then, treat this directory as design notes, not shippable code.
+If something genuinely belongs server-side, write it fresh against the current
+codebase with authentication, input validation and tests, rather than reviving
+a sketch that had none.
