@@ -54,6 +54,13 @@ const ANGLE_PRECISION = (2 * Math.PI) / 180;
 
 const PHI = 0.5 * (-1 + Math.sqrt(5));
 
+/**
+ * Below this width-to-height ratio a stroke counts as a line and is scaled
+ * uniformly. 0.25 keeps "I", "1" and "-" intact while leaving genuinely
+ * two-dimensional letters on the non-uniform path.
+ */
+const LINEAR_ASPECT = 0.25;
+
 /** Longest possible distance inside the square, used to turn distance into a score. */
 const HALF_DIAGONAL = 0.5 * Math.sqrt(SQUARE_SIZE ** 2 + SQUARE_SIZE ** 2);
 
@@ -136,16 +143,32 @@ function rotateBy(points: readonly Point[], radians: number): Point[] {
 /**
  * Scale into a square of `SQUARE_SIZE`.
  *
- * Non-uniformly, which is the paper's choice and worth knowing: it makes a
- * squashed circle match a round one. That suits drawing in the air, where the
- * aspect ratio of a shape says more about how far the arm reached than about
- * what the person meant.
+ * Non-uniformly for most strokes, which is the paper's choice and worth
+ * knowing: it makes a squashed circle match a round one. That suits drawing in
+ * the air, where the aspect ratio of a shape says more about how far the arm
+ * reached than about what the person meant.
+ *
+ * Except for strokes that are nearly a line, where it is actively harmful. A
+ * hand-drawn "I" is 250 units tall and perhaps 8 wide, all of that width being
+ * tremor; scaling x by 250/8 magnifies the tremor thirtyfold and turns the
+ * letter into a wandering scribble that matches anything. So a stroke thinner
+ * than `LINEAR_ASPECT` is scaled uniformly, which keeps a line a line. The
+ * paper notes this case; several $1 variants handle it the same way.
  */
 function scaleToSquare(points: readonly Point[]): Point[] {
     const xs = points.map((p) => p.x);
     const ys = points.map((p) => p.y);
     const width = Math.max(...xs) - Math.min(...xs);
     const height = Math.max(...ys) - Math.min(...ys);
+    const longest = Math.max(width, height);
+    if (longest === 0) {
+        return points.map((p) => ({ ...p }));
+    }
+
+    if (Math.min(width, height) / longest < LINEAR_ASPECT) {
+        const factor = SQUARE_SIZE / longest;
+        return points.map((p) => ({ x: p.x * factor, y: p.y * factor }));
+    }
     return points.map((p) => ({
         x: width === 0 ? p.x : p.x * (SQUARE_SIZE / width),
         y: height === 0 ? p.y : p.y * (SQUARE_SIZE / height),
@@ -157,11 +180,21 @@ function translateToOrigin(points: readonly Point[]): Point[] {
     return points.map((p) => ({ x: p.x - c.x, y: p.y - c.y }));
 }
 
-/** Reduce a raw stroke to the form templates and candidates are compared in. */
-export function normalize(points: readonly Point[]): Point[] {
+/**
+ * Reduce a raw stroke to the form templates and candidates are compared in.
+ *
+ * `rotationInvariant` is the single most consequential switch in this file.
+ * With it on, a shape drawn at any angle reads the same — right for a triangle.
+ * With it off, orientation is preserved, which is the only way an alphabet can
+ * work: M and W, N and Z, 6 and 9, C and U are each the same stroke turned
+ * around, and normalising rotation away makes them literally indistinguishable.
+ */
+export function normalize(points: readonly Point[], rotationInvariant = true): Point[] {
     const resampled = resample(points, NUM_POINTS);
-    const rotated = rotateBy(resampled, -indicativeAngle(resampled));
-    return translateToOrigin(scaleToSquare(rotated));
+    const oriented = rotationInvariant
+        ? rotateBy(resampled, -indicativeAngle(resampled))
+        : resampled;
+    return translateToOrigin(scaleToSquare(oriented));
 }
 
 /** Mean point-to-point distance between two canonical paths. */
@@ -185,9 +218,16 @@ function distanceAtAngle(points: readonly Point[], template: Template, radians: 
  * distance function is unimodal here, and this needs about a tenth of the
  * evaluations.
  */
-function distanceAtBestAngle(points: readonly Point[], template: Template): number {
-    let a = -ANGLE_RANGE;
-    let b = ANGLE_RANGE;
+function distanceAtBestAngle(
+    points: readonly Point[],
+    template: Template,
+    angleRange: number,
+): number {
+    if (angleRange === 0) {
+        return distanceAtAngle(points, template, 0);
+    }
+    let a = -angleRange;
+    let b = angleRange;
     let x1 = PHI * a + (1 - PHI) * b;
     let f1 = distanceAtAngle(points, template, x1);
     let x2 = (1 - PHI) * a + PHI * b;
@@ -211,15 +251,46 @@ function distanceAtBestAngle(points: readonly Point[], template: Template): numb
     return Math.min(f1, f2);
 }
 
+export interface RecognizerOptions {
+    /**
+     * Whether a symbol keeps its meaning when turned. True for shapes, false
+     * for anything where up is part of the identity — see `normalize`.
+     */
+    rotationInvariant: boolean;
+    /**
+     * Half-width of the rotation search, in radians. Even an orientation-
+     * sensitive set wants a little, because a hand in the air is never level;
+     * too much and the pairs that rotation-invariance would have merged start
+     * merging anyway.
+     */
+    angleRange: number;
+}
+
+export const SHAPE_OPTIONS: RecognizerOptions = {
+    rotationInvariant: true,
+    angleRange: ANGLE_RANGE,
+};
+
+/** ±12° — enough for a tilted hand, far short of the 90° that turns N into Z. */
+export const ORIENTED_OPTIONS: RecognizerOptions = {
+    rotationInvariant: false,
+    angleRange: (12 * Math.PI) / 180,
+};
+
 export class DollarRecognizer {
     private templates: Template[] = [];
+    private readonly options: RecognizerOptions;
+
+    constructor(options: RecognizerOptions = SHAPE_OPTIONS) {
+        this.options = options;
+    }
 
     /** Register a symbol from a single raw stroke. */
     learn(name: string, stroke: readonly Point[]): void {
         if (stroke.length < 2) {
             throw new Error(`Template "${name}" needs at least 2 points, got ${stroke.length}`);
         }
-        this.templates.push({ name, points: normalize(stroke) });
+        this.templates.push({ name, points: normalize(stroke, this.options.rotationInvariant) });
     }
 
     /** Forget every template registered under `name`. Returns how many went. */
@@ -250,12 +321,12 @@ export class DollarRecognizer {
         if (this.templates.length === 0 || stroke.length < 2) {
             return null;
         }
-        const candidate = normalize(stroke);
+        const candidate = normalize(stroke, this.options.rotationInvariant);
 
         let best: Template | null = null;
         let bestDistance = Infinity;
         for (const template of this.templates) {
-            const d = distanceAtBestAngle(candidate, template);
+            const d = distanceAtBestAngle(candidate, template, this.options.angleRange);
             if (d < bestDistance) {
                 bestDistance = d;
                 best = template;

@@ -31,7 +31,8 @@ import { biometricEngine } from "@/lib/biometric-engine";
 import { Sparkline, StatusFlag } from "@/components/Telemetry";
 import { asset } from "@/lib/base-path";
 import { AirCanvas } from "@/lib/air-canvas";
-import { DollarRecognizer } from "@/lib/dollar-recognizer";
+import { DollarRecognizer, ORIENTED_OPTIONS, SHAPE_OPTIONS } from "@/lib/dollar-recognizer";
+import { AIR_SETS } from "@/lib/air-letters";
 import { BUILT_IN_SHAPES, BUILT_IN_SHAPE_NAMES } from "@/lib/air-shapes";
 
 /**
@@ -39,6 +40,32 @@ import { BUILT_IN_SHAPES, BUILT_IN_SHAPE_NAMES } from "@/lib/air-shapes";
  * vocabulary travels with the model rather than being hardcoded here.
  * Produced by: python dextera.py train --export models/<name>
  */
+/** What the air recogniser is currently matching against. */
+type AirMode = "shapes" | "letters" | "digits";
+
+const AIR_MODES: { id: AirMode; label: string }[] = [
+    { id: "shapes", label: "Shapes" },
+    { id: "letters", label: "A-Z" },
+    { id: "digits", label: "0-9" },
+];
+
+/**
+ * Shapes and text need opposite settings, which is why this is not one
+ * recogniser with a bigger vocabulary. A shape keeps its meaning turned on its
+ * side; a letter does not, and matching letters rotation-invariantly makes M
+ * and W, N and Z the same stroke.
+ */
+function buildAirRecognizer(mode: AirMode): DollarRecognizer {
+    if (mode === "shapes") {
+        const recognizer = new DollarRecognizer(SHAPE_OPTIONS);
+        for (const [name, points] of Object.entries(BUILT_IN_SHAPES)) recognizer.learn(name, points);
+        return recognizer;
+    }
+    const recognizer = new DollarRecognizer(ORIENTED_OPTIONS);
+    for (const [name, points] of Object.entries(AIR_SETS[mode])) recognizer.learn(name, points);
+    return recognizer;
+}
+
 const MODEL_BUNDLES = [
     { id: "hagrid", name: "General gestures", url: asset("/onnx/hagrid/gesture.onnx"), classes: 18 },
     { id: "asl_alphabet", name: "ASL fingerspelling", url: asset("/onnx/asl_alphabet/gesture.onnx"), classes: 26 },
@@ -150,10 +177,13 @@ export default function Console() {
     // Off by default: a second landmarker is real per-frame cost, and the
     // gesture path must not get slower for people who never turn this on.
     const [airDraw, setAirDraw] = useState(false);
+    const [airMode, setAirMode] = useState<AirMode>("shapes");
     const [airShape, setAirShape] = useState<{ name: string; score: number } | null>(null);
+    const [airText, setAirText] = useState("");
     const airDrawRef = useRef(airDraw);
+    const airModeRef = useRef(airMode);
     const airCanvasRef = useRef<AirCanvas | null>(null);
-    const airRecognizerRef = useRef<DollarRecognizer | null>(null);
+    const airRecognizerRef = useRef<{ mode: AirMode; recognizer: DollarRecognizer } | null>(null);
 
     const [faceEnabled, setFaceEnabled] = useState(false);
     const [facialMarker, setFacialMarker] = useState<FacialMarker | null>(null);
@@ -171,6 +201,11 @@ export default function Console() {
         // re-enabling does not resume someone else's shape.
         if (!airDraw) airCanvasRef.current?.reset();
     }, [airDraw]);
+    useEffect(() => {
+        airModeRef.current = airMode;
+        airCanvasRef.current?.reset();
+        setAirShape(null);
+    }, [airMode]);
 
     // Load on demand rather than at boot: most sessions never enable it, and
     // the model is a few megabytes.
@@ -442,13 +477,14 @@ export default function Console() {
                         // the recogniser would read as a different shape.
                         if (airDrawRef.current) {
                             const air = (airCanvasRef.current ??= new AirCanvas());
-                            const recognizer = (airRecognizerRef.current ??= (() => {
-                                const r = new DollarRecognizer();
-                                for (const [name, pts] of Object.entries(BUILT_IN_SHAPES)) {
-                                    r.learn(name, pts);
-                                }
-                                return r;
-                            })());
+                            const mode = airModeRef.current;
+                            if (airRecognizerRef.current?.mode !== mode) {
+                                airRecognizerRef.current = {
+                                    mode,
+                                    recognizer: buildAirRecognizer(mode),
+                                };
+                            }
+                            const { recognizer } = airRecognizerRef.current;
 
                             const event = air.feed(result.landmarks);
                             if (event?.type === "end") {
@@ -456,7 +492,13 @@ export default function Console() {
                                 // Below this the best match is closer to noise
                                 // than to any template; reporting it anyway
                                 // would fire actions on stray hand movement.
-                                setAirShape(match && match.score >= 0.72 ? match : null);
+                                const accepted = match && match.score >= 0.72 ? match : null;
+                                setAirShape(accepted);
+                                // Writing is cumulative — a letter on its own is
+                                // rarely the point.
+                                if (accepted && mode !== "shapes") {
+                                    setAirText((t) => (t + accepted.name).slice(-24));
+                                }
                             } else if (event?.type === "start") {
                                 setAirShape(null);
                             }
@@ -970,18 +1012,51 @@ export default function Console() {
                             </div>
                             {airDraw ? (
                                 <>
+                                    <div className="mb-3 flex gap-1">
+                                        {AIR_MODES.map((m) => (
+                                            <button
+                                                key={m.id}
+                                                onClick={() => setAirMode(m.id)}
+                                                className={`label flex-1 rounded px-2 py-1 text-[10px] ${
+                                                    airMode === m.id
+                                                        ? "bg-[var(--ink)] text-[var(--paper)]"
+                                                        : "text-[var(--ink-3)] hover:opacity-70"
+                                                }`}
+                                            >
+                                                {m.label}
+                                            </button>
+                                        ))}
+                                    </div>
                                     <p className="readout text-2xl text-[var(--ink)]">
-                                        {airShape ? airShape.name : "—"}
+                                        {airMode === "shapes"
+                                            ? (airShape?.name ?? "—")
+                                            : (airText || "—")}
                                     </p>
                                     <p className="mt-1 text-[11px] text-[var(--ink-3)]">
                                         {airShape
-                                            ? `${(airShape.score * 100).toFixed(0)}% match`
+                                            ? `${airShape.name} · ${(airShape.score * 100).toFixed(0)}% match`
                                             : "Pinch thumb and finger together to draw, open to finish."}
                                     </p>
-                                    <p className="mt-3 text-[11px] leading-relaxed text-[var(--ink-3)]">
-                                        Knows {BUILT_IN_SHAPE_NAMES.join(", ")}. Size, position and
-                                        tilt do not matter — the shape does.
-                                    </p>
+                                    {airMode === "shapes" ? (
+                                        <p className="mt-3 text-[11px] leading-relaxed text-[var(--ink-3)]">
+                                            Knows {BUILT_IN_SHAPE_NAMES.join(", ")}. Size, position
+                                            and tilt do not matter — the shape does.
+                                        </p>
+                                    ) : (
+                                        <div className="mt-3 flex items-start justify-between gap-3">
+                                            <p className="text-[11px] leading-relaxed text-[var(--ink-3)]">
+                                                One stroke per character, drawn upright. Letters and
+                                                digits are separate modes because 0/O and 1/I are
+                                                the same stroke.
+                                            </p>
+                                            <button
+                                                onClick={() => setAirText("")}
+                                                className="label shrink-0 text-[10px] text-[var(--ink-3)] hover:opacity-70"
+                                            >
+                                                Clear
+                                            </button>
+                                        </div>
+                                    )}
                                 </>
                             ) : (
                                 <p className="text-[11px] leading-relaxed text-[var(--ink-3)]">

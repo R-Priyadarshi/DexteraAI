@@ -138,12 +138,15 @@ Stated plainly, because the alternative is a promise the code does not keep:
   standard corpus, is research-licensed.
 - **Continuous sign-language translation** is out of scope. Recognizing isolated
   signs is a different and much easier problem than translating fluent signing.
-- **Air drawing recognises shapes, not handwriting.** Pinch to draw and a
-  shape is matched geometrically by the $1 Unistroke Recognizer — no model, no
-  training data, and a new symbol can be taught from one example. It is
-  single-stroke and rotation-invariant by construction, so it will not read
-  multi-stroke letters, and shapes differing only in orientation (an arrow left
-  versus right) are the same shape to it. Direction is the swipe path's job.
+- **Air drawing and air writing are geometric, not learned.** Pinch to draw;
+  the stroke is matched by the $1 Unistroke Recognizer — no model, no training
+  data, and a new symbol can be taught from one example. Three modes: shapes
+  (rotation-invariant, so a triangle drawn askew still reads as one), A–Z, and
+  0–9. Letters and digits are matched *with orientation*, because M and W, N and
+  Z, 6 and 9 are the same stroke turned around, and they are separate modes
+  because 0/O, 1/I, 5/S and 2/Z are the same stroke as each other. Every
+  character is one stroke — Graffiti-style simplified forms, so A has no
+  crossbar — since there is no pen to lift in mid-air.
 - **The vocabulary is not culturally neutral.** It comes from HaGRID, and a few
   of its gestures — `ok`, `peace_inverted`, `rock`, `like` — carry offensive
   readings in some regions, including parts of Europe and the US. Recognising a
