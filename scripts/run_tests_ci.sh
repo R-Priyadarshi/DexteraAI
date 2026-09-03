@@ -45,11 +45,23 @@ if [ "${GITHUB_ACTIONS:-}" != "true" ]; then
   exit "$status"
 fi
 
+# Which slice to report. faulthandler prints "Fatal Python error", then the
+# stack innermost-first, so a plain tail keeps the outermost frames and drops
+# both the innermost ones and the abort message itself — which a native library
+# usually writes just *before* faulthandler runs. So on a fatal signal, report
+# from a little before that marker instead of from the end.
+if marker=$(grep -n "Fatal Python error" "$OUT" | head -1 | cut -d: -f1); then
+  start=$(( marker > 25 ? marker - 25 : 1 ))
+  slice=$(sed -n "${start},$((start + 90))p" "$OUT")
+else
+  slice=$(tail -n 40 "$OUT")
+fi
+
 # One multi-line annotation rather than one per line: GitHub caps how many it
 # will render, and a crash tail split across 40 annotations loses the ordering
 # that makes it readable. Percent must be escaped before the newlines, or it
 # would corrupt the %0A sequences written after it.
-tail -n 40 "$OUT" \
+printf '%s\n' "$slice" \
   | sed -e 's/%/%25/g' -e 's/\r/%0D/g' \
   | awk 'BEGIN { ORS = "%0A" } { print }' \
   | { read -r -d '' body || true; \
