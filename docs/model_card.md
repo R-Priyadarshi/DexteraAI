@@ -50,10 +50,14 @@ coordinates (63), fingertip-to-wrist distances (5), fingertip pairwise distances
 
 Two separately-trained bundles, each shipping its own `labels.json`:
 
-| Bundle | Classes | Landmark samples | Source |
-|---|---|---|---|
-| `models/hagrid` | 18 general gestures | 65,802 | HaGRID (512px classification subset) |
-| `models/asl_alphabet` | 26 ASL letters | 8,638 | ASL alphabet dataset |
+| Bundle | Classes | Landmark samples | Source | Commercial standing |
+|---|---|---|---|---|
+| `models/hagrid` | 18 general gestures | 65,802 | HaGRID (512px classification subset) | Permitted, with attribution and share-alike conditions |
+| `models/asl_alphabet` | 26 ASL letters | 8,638 | ASL alphabet dataset | **Unresolved — source declares no licence** |
+
+The two bundles do not stand in the same place legally, and the weaker one is
+not the one with visible conditions. Read
+[DATASET_LICENSES.md](DATASET_LICENSES.md) before shipping either commercially.
 
 Sample counts are post-detection: images where MediaPipe found no hand are dropped
 (HaGRID ~70-94% detection depending on shard, ASL ~79%). Only landmarks are stored;

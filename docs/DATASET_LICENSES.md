@@ -10,28 +10,105 @@ landmarks" is not a settled defence.
 
 ## Currently used
 
-| Dataset | Used for | Source | Stated license | Commercial use | Status |
-|---|---|---|---|---|---|
-| HaGRID (classification, 512px) | Track 1: 18 general gestures | `Jayabalambika/hagrid-classification-512p-dataset` on HuggingFace, re-hosting the HaGRID dataset | Upstream HaGRID is published by SberDevices; commonly cited as CC BY-SA 4.0. The HuggingFace mirror declares **no license field**. | **Unconfirmed** | ⚠️ Verify before commercial release |
-| ASL Alphabet v03 | Track 2a: 26 ASL fingerspelling letters | `Marxulia/asl_sign_languages_alphabets_v03` on HuggingFace | **No license declared** on the dataset card | **Unconfirmed** | ⚠️ Verify before commercial release |
-| MediaPipe `hand_landmarker.task` | Hand landmark detection at train and inference time | Google, `storage.googleapis.com/mediapipe-models` | Apache 2.0 (MediaPipe) | Yes | ✅ OK |
+Licenses below were read at their source on **2026-09-04**, not inferred from
+secondary summaries. Re-check on any retrain.
 
-### What "unconfirmed" means here
+| Dataset | Used for | Source | License as stated at source | Commercial use |
+|---|---|---|---|---|
+| HaGRID (classification, 512px) | Track 1: 18 general gestures | `Jayabalambika/hagrid-classification-512p-dataset` on HuggingFace, re-hosting HaGRID | Mirror declares **no license**. Upstream (`hukenovs/hagrid`) ships a custom licence, `license/en_us.pdf` | **Permitted**, with conditions — see below |
+| ASL Alphabet v03 | Track 2a: 26 ASL fingerspelling letters | `Marxulia/asl_sign_languages_alphabets_v03` on HuggingFace | **No license declared.** Dataset card is empty | **Unresolved** — see below |
+| MediaPipe `hand_landmarker.task` | Hand landmark detection, train and inference | Google, `storage.googleapis.com/mediapipe-models` | Apache 2.0 | Yes ✅ |
+| MediaPipe `face_landmarker.task` | Non-manual markers (blendshapes) | Google, same origin | Apache 2.0 | Yes ✅ |
 
-Both training datasets are community re-uploads that carry no explicit license
-metadata. Re-hosting does not grant rights the uploader did not have. Before any
-paid or commercial distribution of models trained on them, do one of:
+### HaGRID: commercial use is allowed; two conditions attach
 
-1. Confirm the upstream license permits commercial use, and comply with its terms
-   (attribution, and for ShareAlike, the downstream obligations it imposes).
-2. Re-train on data you have clear rights to (own collection, or a dataset with an
-   explicit permissive license).
-3. Ship these as research/preview weights only, clearly labelled, and keep them out
-   of the commercial artifact.
+The upstream licence is **not** CC BY-SA 4.0, though it is widely cited as such.
+It is a custom document titled *"Public license with attribution and conditions
+reserved"*, and it says so itself in a footnote:
 
-The pipeline makes option 2 cheap: `training/datasets/extract_landmarks.py` accepts
-`--image-dir` for any folder-per-class image set, so swapping the data source does
-not require touching the model code.
+> This license is not a Creative Commons license. The text of this license is a
+> reworking of a Creative Commons Corporation (Attribution-ShareAlike 4.0)
+> license […] under the terms of the CC0.
+
+Database rights in it run under the Civil Code of the Russian Federation rather
+than an EU or US regime.
+
+**There is no non-commercial restriction.** The word "commercial" does not occur
+anywhere in the five-page document, and Section 2(a)(1) grants a "worldwide,
+royalty-free, non-sublicensable, non-exclusive, irrevocable" licence to reproduce
+the material and to create Adapted Material. This is the one point where the
+earlier entry in this file was too pessimistic: the data can be used in a paid
+product.
+
+Two conditions do attach:
+
+1. **Attribution** (Section 3(a)) — retain creator information, the copyright
+   notice, notice of the licence, the warranty disclaimer, and a link to the
+   material, and state that changes were made. This repository was not doing
+   that; the Attribution section below now discharges it.
+2. **ShareAlike** (Section 3(b)) — Adapted Material must be licensed under "a
+   license with the same License Elements […] or a BY-SA-compatible license."
+
+### The open question, stated precisely
+
+Condition 2 collides with this repository's MIT licence **if trained weights are
+Adapted Material**. MIT imposes no share-alike, so it is not BY-SA-compatible.
+
+Whether a model trained on a dataset is a derivative work of that dataset is
+genuinely unsettled law, not a question with a known answer this file is
+withholding. Two facts bear on it here, both in the project's favour and neither
+dispositive:
+
+- **Only a subset was used.** Roughly 65,802 samples were extracted from a
+  507,050-row corpus — about 13%. Section 4(b) attaches Adapted-Material status
+  to a database incorporating "all or substantially all" of the content.
+- **No source imagery survives.** The pipeline persists 21 landmark coordinates
+  per hand and discards the images. Nothing in `models/` or `data/sequences/`
+  reconstructs a HaGRID photograph.
+
+That is an argument, not a clearance. **Have counsel settle it before charging
+for anything built on `models/hagrid`.** If the answer comes back unfavourable,
+the fix is bounded: retrain Track 1 on data with clear terms —
+`extract_landmarks.py --image-dir` takes any folder-per-class image set, so no
+model or app code changes.
+
+### ASL Alphabet: the higher risk, and the one with no fallback
+
+`Marxulia/asl_sign_languages_alphabets_v03` declares **no licence at all** and
+its dataset card is empty. Absent a licence, copyright default is that no rights
+are granted — permissive intent cannot be inferred from public availability, and
+a re-uploader cannot grant rights they never held. Unlike HaGRID there is no
+upstream document to fall back on and no identified rights holder to ask.
+
+This makes `models/asl_alphabet` the **weaker** of the two positions
+commercially, despite HaGRID being the one that carries visible conditions. A
+licence with obligations is a stronger footing than no licence at all.
+
+Fingerspelling is also the cheapest track to re-source: 26 static handshapes,
+8,638 samples, no motion. It can be recorded first-hand in an afternoon, or
+taken from a CC0/CC BY set, and retrained with one command.
+
+## Attribution
+
+Provided in satisfaction of Section 3(a) of the HaGRID licence.
+
+`models/hagrid` is trained on hand landmarks extracted from the **HaGRID**
+dataset by Alexander Kapitanov, Karina Kvanchiani, Alexander Nagaev, Roman
+Kraynov and Andrei Makhliarchuk (SberDevices).
+
+- Dataset and licence: https://github.com/hukenovs/hagrid
+- Licence text: https://github.com/hukenovs/hagrid/blob/master/license/en_us.pdf
+- Paper: *HaGRID — HAnd Gesture Recognition Image Dataset*, WACV 2024,
+  https://arxiv.org/abs/2206.08219
+
+**Changes made to the Licensed Material:** images were not redistributed. A
+subset was read once to extract MediaPipe hand landmark coordinates, which were
+normalised, converted to an 86-dimensional feature vector and used as training
+input. The images themselves are not reproduced, stored or distributed by this
+project.
+
+The dataset is provided by its licensors without warranties, as set out in
+Section 5 of that licence.
 
 ## Evaluated and deliberately not used
 
@@ -43,6 +120,11 @@ not require touching the model code.
 Dynamic gestures and word-level sign language therefore remain **not implemented**
 rather than implemented on data that cannot ship. See "Known scope limits" in the
 README.
+
+Both exclusions are **settled, not provisional**: the project owner confirmed on
+2026-09-04 that DexteraAI may be sold, which removes the research-and-education
+route these two corpora are distributed under. Revisit only if a commercial
+licence is bought from the rights holders, or the corpus is replaced.
 
 ## Rules for adding a dataset
 
