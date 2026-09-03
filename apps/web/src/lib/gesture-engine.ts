@@ -10,6 +10,11 @@
 
 import * as ort from "onnxruntime-web";
 import { gestureStore } from "./gesture-store";
+import {
+  GestureSegmenter,
+  type GesturePhase,
+  type SegmenterConfig,
+} from "./gesture-segmenter";
 
 // Global Hands from /onnx/mediapipe/hands.js loaded in layout.tsx
 declare const Hands: any;
@@ -43,6 +48,21 @@ export interface GestureResult {
   inferenceTimeMs: number;
   velocity: { x: number; y: number; z: number };
   spatialIntent: SpatialIntent;
+  /**
+   * True when the calibrated confidence fell below the bundle's open-set
+   * rejection threshold. The label is still reported for display, but consumers
+   * that trigger actions must treat a rejected frame as "no gesture".
+   */
+  rejected: boolean;
+  /**
+   * Discrete phase from the segmenter. Actions should fire on `onset` only;
+   * `hold` repeats every frame for as long as the pose is maintained.
+   */
+  phase: GesturePhase;
+  /** Milliseconds the current segment has been held. */
+  heldMs: number;
+  /** Unique id of the current segment, for de-duplicating repeated holds. */
+  segmentId: number;
 }
 
 /**
@@ -64,6 +84,13 @@ const DEFAULT_GESTURE_LABELS = [
 ];
 
 const FEATURE_DIM = 86;
+
+/**
+ * Sentinel id for a user-taught gesture. It sits far above any real class index
+ * so it can never collide with a bundle label, however large the vocabulary
+ * grows.
+ */
+export const CUSTOM_GESTURE_ID = 999;
 const DEFAULT_SEQUENCE_LENGTH = 30;
 
 /** Shape of the labels.json emitted next to an exported gesture.onnx. */
@@ -72,6 +99,25 @@ export interface ModelBundle {
   seq_len?: number;
   feature_dim?: number;
   val_accuracy?: number;
+  test_accuracy?: number;
+  calibration?: BundleCalibration | null;
+}
+
+/**
+ * Confidence calibration fitted on the model's held-out validation split by
+ * `training/evaluation/calibrate_confidence.py`.
+ *
+ * A softmax classifier is closed-set and typically overconfident, which matters
+ * here because users constantly make hand shapes outside the vocabulary. The
+ * temperature rescales logits so reported confidence matches observed accuracy;
+ * the threshold is the cut-off below which we report nothing rather than a
+ * confident wrong label.
+ */
+export interface BundleCalibration {
+  temperature: number;
+  rejection_threshold: number;
+  ece_before?: number;
+  ece_after?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -210,6 +256,33 @@ export class GestureEngine {
   private labels: string[] = [...DEFAULT_GESTURE_LABELS];
   private sequenceLength: number = DEFAULT_SEQUENCE_LENGTH;
 
+  /**
+   * Calibration from the loaded bundle. The defaults are deliberately inert
+   * (T=1 leaves the softmax untouched) so an uncalibrated bundle behaves
+   * exactly as it did before, just with a conservative generic threshold.
+   */
+  private temperature = 1.0;
+  private rejectionThreshold = 0.6;
+
+  private readonly segmenter = new GestureSegmenter();
+
+  /** Tune onset/offset behaviour, e.g. for a latency-sensitive binding. */
+  configureSegmenter(config: Partial<SegmenterConfig>): void {
+    this.segmenter.configure(config);
+  }
+
+  getSegmenterConfig(): SegmenterConfig {
+    return this.segmenter.getConfig();
+  }
+
+  /** Calibration actually in force, for display in the console. */
+  getCalibration(): { temperature: number; rejectionThreshold: number } {
+    return {
+      temperature: this.temperature,
+      rejectionThreshold: this.rejectionThreshold,
+    };
+  }
+
   /** The active gesture vocabulary (from the model bundle when available). */
   getLabels(): string[] {
     return [...this.labels];
@@ -235,9 +308,18 @@ export class GestureEngine {
         if (bundle.seq_len && bundle.seq_len > 0) {
           this.sequenceLength = bundle.seq_len;
         }
+        // An uncalibrated bundle keeps T=1 and the conservative default
+        // threshold rather than inheriting whatever the last bundle used.
+        const cal = bundle.calibration;
+        this.temperature = cal && cal.temperature > 0 ? cal.temperature : 1.0;
+        this.rejectionThreshold = cal ? cal.rejection_threshold : 0.6;
+
         console.log(
           `GestureEngine: loaded ${this.labels.length} labels from bundle`,
-          bundle.val_accuracy ? `(val acc ${bundle.val_accuracy})` : ""
+          bundle.val_accuracy ? `(val acc ${bundle.val_accuracy})` : "",
+          cal
+            ? `calibrated T=${this.temperature} reject<${this.rejectionThreshold}`
+            : "(uncalibrated)"
         );
       }
     } catch {
@@ -377,6 +459,9 @@ export class GestureEngine {
       this.missingFrameCount++;
       if (this.missingFrameCount > this.MISSING_FRAME_TOLERANCE) {
         this.sequenceBuffer = []; // Only wipe after persistent loss
+        // Tracking is gone, so we cannot say the gesture *ended* — only that we
+        // no longer know. Reset without emitting an offset.
+        this.segmenter.reset();
       }
       return {
         gestureName: "no hand",
@@ -387,6 +472,10 @@ export class GestureEngine {
         inferenceTimeMs: performance.now() - t0,
         velocity: { x: 0, y: 0, z: 0 },
         spatialIntent: "none",
+        rejected: true,
+        phase: "idle",
+        heldMs: 0,
+        segmentId: 0,
       };
     }
 
@@ -397,7 +486,7 @@ export class GestureEngine {
     this.pushFeatures(landmarks);
 
     // 3. Temporal Classification (Transformer)
-    let gestureResult = { gestureId: 0, confidence: 1.0 }; // Default to "static" if no session
+    let gestureResult = { gestureId: -1, confidence: 0, rejected: true };
 
     if (this.session && this.sequenceBuffer.length >= this.sequenceLength) {
       const classification = await this.classifyGesture();
@@ -408,42 +497,42 @@ export class GestureEngine {
 
     const t1 = performance.now();
 
-    // 4. Custom Gesture Matching (K-NN Fallback or Priority)
+    // 4. Custom gestures.
+    //
+    // These are consulted only when the trained model has *not* produced a
+    // confident answer. A user-taught k-NN class matched on a handful of
+    // examples should never outrank a calibrated model that scored 98% on a
+    // held-out split — it only fills the gap where that model abstains.
     let finalGestureId = gestureResult.gestureId;
     let finalConfidence = gestureResult.confidence;
-    let finalGestureName = this.labels[gestureResult.gestureId] || "unknown";
+    let finalRejected = gestureResult.rejected;
+    let finalGestureName =
+      finalGestureId >= 0 ? (this.labels[finalGestureId] ?? "unknown") : "unknown";
 
-    // P0: Geometric Heuristic Check (Hard override for Handshake stability)
-    // "Peace" (5), "Fist" (2), "Thumbs Up" (3)
-    const geoMatch = this.detectGeometricGesture(landmarks);
-    if (geoMatch) {
-      finalGestureId = geoMatch.id;
-      finalGestureName = geoMatch.name;
-      finalConfidence = 1.0; // Geometric certainty
-    } else if (finalConfidence < 0.85) {
-      // P1: K-NN Custom Gestures
+    if (finalRejected) {
       const customMatch = this.matchCustomGesture(landmarks);
       if (customMatch && customMatch.confidence > finalConfidence) {
-        finalGestureId = 999;
+        finalGestureId = CUSTOM_GESTURE_ID;
         finalConfidence = customMatch.confidence;
         finalGestureName = customMatch.name;
+        // The k-NN match carries its own acceptance test (see
+        // `matchCustomGesture`), so reaching here means it passed.
+        finalRejected = false;
       }
     }
 
     // 5. Dynamic Spatial Intent (Pinch/Swipe)
+    //
+    // Pinch is resolved below rather than here: an ungated distance test fires
+    // constantly while the hand is in motion, because the thumb and index pass
+    // close together during almost any travel. It is only meaningful once the
+    // hand has settled.
     let spatialIntent: GestureResult["spatialIntent"] = "none";
-    const thumbTip = landmarks[4];
-    const indexTip = landmarks[8];
-    const dist = dist3d(thumbTip, indexTip);
-    
-    // High-precision pinch detection (Geometric distance)
-    if (dist < 0.06) spatialIntent = "pinch_close";
-    else if (dist < 0.12) spatialIntent = "pinch_open";
+    const dist = dist3d(landmarks[4], landmarks[8]);
 
     // 6. Calculate Velocity for Swipes (Hardened with Kinetic Momentum & Directional Lock)
     const velocity = { x: 0, y: 0, z: 0 };
     const now = performance.now();
-    let totalDisplacementX = 0;
 
     if (this.lastLandmarks && this.lastTimestamp > 0) {
         const dt = (now - this.lastTimestamp) / 1000;
@@ -458,9 +547,6 @@ export class GestureEngine {
             
             velocity.x = this.vBuffer.reduce((sum: number, v: { x: number; y: number }) => sum + v.x, 0) / this.vBuffer.length;
             velocity.y = this.vBuffer.reduce((sum: number, v: { x: number; y: number }) => sum + v.y, 0) / this.vBuffer.length;
-            
-            // Calculate total displacement over the buffer window
-            totalDisplacementX = landmarks[0].x - (this.lastLandmarks[0].x || landmarks[0].x);
         }
     }
     this.lastLandmarks = [...landmarks];
@@ -499,10 +585,20 @@ export class GestureEngine {
         else if (velocity.x > standardThreshold) spatialIntent = "swipe_right";
     }
 
-    // Global motion telemetry for industrial verification
-    if (Math.abs(velocity.x) > 0.1) {
-        console.log(`[Neural_Motion] Vel_X: ${velocity.x.toFixed(3)} | Dominant: ${isHorizontalDominant} | Intent: ${spatialIntent}`);
-    }
+    // 7. Segmentation.
+    //
+    // Everything above scores this frame in isolation. The segmenter converts
+    // that stream into discrete onset/hold/offset events, which is what any
+    // consumer binding a non-idempotent action actually needs.
+    const segment = this.segmenter.push(
+      {
+        gestureName: finalGestureName,
+        gestureId: finalGestureId,
+        confidence: finalConfidence,
+        rejected: finalRejected,
+      },
+      now
+    );
 
     return {
       gestureName: finalGestureName,
@@ -512,7 +608,11 @@ export class GestureEngine {
       handedness,
       inferenceTimeMs: t1 - t0,
       velocity,
-      spatialIntent
+      spatialIntent,
+      rejected: finalRejected,
+      phase: segment.phase,
+      heldMs: segment.heldMs,
+      segmentId: segment.segmentId,
     };
   }
 
@@ -525,17 +625,14 @@ export class GestureEngine {
   private async classifyGesture(): Promise<{
     gestureId: number;
     confidence: number;
+    rejected: boolean;
   } | null> {
     if (!this.session) return null;
 
     if (this.sequenceBuffer.length < this.sequenceLength) {
-      // Buffer not yet full, return "pre-inference" state
-      return {
-        gestureId: -1,
-        confidence: 0
-      };
+      // Buffer not yet full: nothing to classify, and no claim to make.
+      return { gestureId: -1, confidence: 0, rejected: true };
     }
-    // ... rest of classifyGesture unchanged ...
 
     // Build input tensor: (1, seq_len, feature_dim)
     const inputData = new Float32Array(this.sequenceLength * FEATURE_DIM);
@@ -558,22 +655,40 @@ export class GestureEngine {
       mask: maskTensor,
     });
 
-    const logits = results["logits"].data as Float32Array;
+    const raw = results["logits"].data as Float32Array;
 
-    // Softmax
-    const maxLogit = Math.max(...logits);
-    const expLogits = logits.map((l: number) => Math.exp(l - maxLogit));
-    const sumExp = expLogits.reduce((a: number, b: number) => a + b, 0);
-    const probs = expLogits.map((e: number) => e / sumExp);
+    // Temperature scaling, then softmax. Dividing by T never changes which
+    // class wins — only how confident the model claims to be — so this is safe
+    // to apply before the argmax and is what makes `rejectionThreshold`
+    // comparable to the accuracy measured at fit time.
+    const t = this.temperature > 0 ? this.temperature : 1.0;
+    const logits = new Float32Array(raw.length);
+    for (let i = 0; i < raw.length; i++) logits[i] = raw[i] / t;
+
+    // Subtract the max before exponentiating, or a large logit overflows to
+    // Infinity and the whole distribution becomes NaN.
+    let maxLogit = -Infinity;
+    for (let i = 0; i < logits.length; i++) {
+      if (logits[i] > maxLogit) maxLogit = logits[i];
+    }
+
+    let sumExp = 0;
+    const probs = new Float32Array(logits.length);
+    for (let i = 0; i < logits.length; i++) {
+      probs[i] = Math.exp(logits[i] - maxLogit);
+      sumExp += probs[i];
+    }
 
     let maxIdx = 0;
-    for (let i = 1; i < probs.length; i++) {
+    for (let i = 0; i < probs.length; i++) {
+      probs[i] /= sumExp;
       if (probs[i] > probs[maxIdx]) maxIdx = i;
     }
 
     return {
       gestureId: maxIdx,
       confidence: probs[maxIdx],
+      rejected: probs[maxIdx] < this.rejectionThreshold,
     };
   }
 
@@ -654,81 +769,6 @@ export class GestureEngine {
   }
 
   /**
-   * Robust geometric heuristic for static gestures (Peace, Fist, Thumbs Up).
-   * Bypasses ML model for critical UI interactions.
-   */
-  private detectGeometricGesture(landmarks: Landmark[]): { id: number, name: string } | null {
-    // Helper to check if a finger is extended (tip higher than pip - assuming upright hand)
-    // Note: Y increases downwards in MediaPipe/Screen coords. So Lower Y = Higher Position.
-    // However, this simple check fails if hand is inverted.
-    // Better check: Distance from Wrist.
-
-    // We use the "Tip furthest from wrist" logic for extension.
-    const isExtended = (tipIdx: number, pipIdx: number, mcpIdx: number) => {
-      const tip = landmarks[tipIdx];
-      const pip = landmarks[pipIdx];
-      const mcp = landmarks[mcpIdx];
-      const wrist = landmarks[0];
-
-      // 1. Distance check
-      const tipDist = dist3d(tip, wrist);
-      const pipDist = dist3d(pip, wrist);
-      const mcpDist = dist3d(mcp, wrist);
-
-      // Tip should be further than PIP and MCP
-      const isFarther = tipDist > pipDist && pipDist > mcpDist;
-
-      // 2. Curvature check (dot product of vectors) - Simplified:
-      // If curled, tip to wrist distance is significantly shorter than fully extended
-      return isFarther;
-    };
-
-    // Refined thresholds can be added if needed
-    const thumbExtended = isExtended(4, 3, 2);
-    const indexExtended = isExtended(8, 6, 5);
-    const middleExtended = isExtended(12, 10, 9);
-    const ringExtended = isExtended(16, 14, 13);
-    const pinkyExtended = isExtended(20, 18, 17);
-
-    // Debug geometric states (Force log for now)
-    if (Math.random() < 0.1) {
-      console.log(`[Geo] T:${thumbExtended} I:${indexExtended} M:${middleExtended} R:${ringExtended} P:${pinkyExtended}`);
-    }
-
-    // 1. Peace Sign (Index + Middle extended, Ring + Pinky curled)
-    const features = extractFeatures(landmarks);
-    const thumbCurl = features[78];
-    const indexCurl = features[79];
-    const middleCurl = features[80];
-    const ringCurl = features[81];
-    const pinkyCurl = features[82];
-
-    // Relative logic: Index and Middle are significantly MORE extended than Ring and Pinky
-    if (indexCurl < ringCurl - 0.2 && middleCurl < pinkyCurl - 0.2) {
-      return { id: 5, name: "peace" };
-    }
-
-    // 2. Thumbs Up (Thumb extended, others curled)
-    // Vertical Dominance: Thumb tip must be higher than the index knuckle
-    const isVerticalThumb = landmarks[4].y < landmarks[5].y - 0.05;
-    if (isVerticalThumb && thumbCurl < 0.5 && indexCurl > 0.4 && middleCurl > 0.4 && ringCurl > 0.4 && pinkyCurl > 0.4) {
-      return { id: 3, name: "thumbs_up" };
-    }
-
-    // 3. Closed Fist (All 4 main fingers curled, thumb tucked or curled)
-    if (indexCurl > 0.4 && middleCurl > 0.4 && ringCurl > 0.4 && pinkyCurl > 0.4) {
-      return { id: 2, name: "closed_fist" };
-    }
-
-    // 4. Open Palm (All extended)
-    if (indexExtended && middleExtended && ringExtended && pinkyExtended) {
-      return { id: 1, name: "open_palm" };
-    }
-
-    return null;
-  }
-
-  /**
    * Release all resources.
    */
   dispose(): void {
@@ -758,6 +798,7 @@ export class GestureEngine {
     this.pBuffer = [];
     this.stationaryFrames = 0;
     this.lastLandmarks = null;
+    this.segmenter.reset();
     this.isInitialized = false;
   }
 }

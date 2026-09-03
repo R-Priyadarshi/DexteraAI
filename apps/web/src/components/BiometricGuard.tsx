@@ -75,18 +75,18 @@ export function BiometricGuard({ gesture, onUnlocked }: BiometricGuardProps) {
             <div className="relative flex w-full max-w-2xl flex-col items-center text-center px-6">
                 {/* Security Hexagon Icon Simulation */}
                 <div className="mb-12 relative">
-                    <div className="h-24 w-24 rounded-2xl border border-blue-500/30 flex items-center justify-center rotate-45 animate-pulse-soft">
-                        <div className="h-px w-12 bg-blue-500 -rotate-45" />
+                    <div className="h-24 w-24 rounded-2xl border border-[var(--signal)] flex items-center justify-center rotate-45 ">
+                        <div className="h-px w-12 bg-[var(--signal)] -rotate-45" />
                     </div>
                     <div className="absolute inset-0 flex items-center justify-center">
-                        <div className={`h-2 w-2 rounded-full bg-blue-500 ${isVerifying ? "scale-[10] opacity-0" : "scale-1"} transition-all duration-1000 shadow-[0_0_20px_rgba(59,130,246,1)]`} />
+                        <div className={`h-2 w-2 rounded-full bg-[var(--signal)] ${isVerifying ? "scale-[10] opacity-0" : "scale-1"} transition-all duration-1000`} />
                     </div>
                 </div>
 
                 <div className="space-y-4 mb-20">
-                    <span className="text-[10px] font-bold tracking-[0.4em] text-blue-500 uppercase">Neural Link Secured</span>
+                    <span className="text-[10px] font-bold tracking-[0.4em] text-[var(--signal)] uppercase">Tracking Secured</span>
                     <h2 className="text-4xl font-light tracking-tight text-[#f5f5f7]">
-                        {isVerifying ? "Authorization Granted" : "Perform Neural Handshake"}
+                        {isVerifying ? "Authorization Granted" : "Perform Calibration"}
                     </h2>
                     <p className="text-sm text-[#86868b] tracking-wide font-light max-w-sm mx-auto">
                         Provide the temporal biometric signature to unlock industrial command controls.
@@ -99,7 +99,7 @@ export function BiometricGuard({ gesture, onUnlocked }: BiometricGuardProps) {
                         <div key={i} className="flex flex-col items-center gap-4">
                             <div className={`relative h-1 w-full rounded-full overflow-hidden bg-white/5`}>
                                 <div
-                                    className={`h-full bg-blue-500 transition-all duration-300 ${i < currentIndex ? "w-full" : (i === currentIndex ? "w-0" : "w-0")}`}
+                                    className={`h-full bg-[var(--signal)] transition-all duration-300 ${i < currentIndex ? "w-full" : (i === currentIndex ? "w-0" : "w-0")}`}
                                     style={{ width: i === currentIndex ? `${holdProgress}%` : (i < currentIndex ? "100%" : "0%") }}
                                 />
                             </div>
@@ -107,7 +107,7 @@ export function BiometricGuard({ gesture, onUnlocked }: BiometricGuardProps) {
                                 <span className={`text-[9px] font-mono tracking-widest uppercase transition-colors duration-500 ${i <= currentIndex ? "text-white" : "text-white/10"}`}>
                                     Step_0{i + 1}
                                 </span>
-                                <span className={`text-[10px] font-bold tracking-tighter uppercase transition-colors duration-500 ${i <= currentIndex ? "text-blue-500" : "text-white/5"}`}>
+                                <span className={`text-[10px] font-bold tracking-tighter uppercase transition-colors duration-500 ${i <= currentIndex ? "text-[var(--signal)]" : "text-white/5"}`}>
                                     {getGestureName(id)}
                                 </span>
                             </div>
@@ -118,7 +118,7 @@ export function BiometricGuard({ gesture, onUnlocked }: BiometricGuardProps) {
                 {/* Real-time Status & Telemetry */}
                 <div className="mt-20 w-full max-w-xs space-y-6">
                     <div className="flex items-center justify-center gap-3">
-                        <div className="h-1 w-1 rounded-full bg-blue-500 animate-pulse" />
+                        <div className="h-1 w-1 rounded-full bg-[var(--signal)] animate-pulse" />
                         <span className="text-[10px] font-mono tracking-[0.2em] text-[#86868b] uppercase">
                             {isVerifying ? "Synching_NeuralNet..." :
                                 (gesture && gesture.gestureId !== -1 && gesture.confidence > 0.4 ?
@@ -148,7 +148,7 @@ export function BiometricGuard({ gesture, onUnlocked }: BiometricGuardProps) {
                                     <div key={idx} className="flex flex-col items-center gap-2">
                                         <div className="h-12 w-1 bg-white/5 rounded-full relative">
                                             <div 
-                                                className="absolute bottom-0 left-0 w-full bg-blue-500/50 rounded-full transition-all duration-300"
+                                                className="absolute bottom-0 left-0 w-full bg-[var(--signal-3)] rounded-full transition-all duration-300"
                                                 style={{ height: `${curl * 100}%` }}
                                             />
                                         </div>

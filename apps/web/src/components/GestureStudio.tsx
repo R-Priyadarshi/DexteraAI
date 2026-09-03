@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { type GestureResult, type Landmark } from "@/lib/gesture-engine";
-import { gestureStore } from "@/lib/gesture-store";
+import { gestureStore, type CustomGesture } from "@/lib/gesture-store";
 
 interface GestureStudioProps {
     gesture: GestureResult | null;
@@ -11,143 +11,243 @@ interface GestureStudioProps {
 
 const REQUIRED_SAMPLES = 40;
 
+/**
+ * Teach the system a gesture it does not know, and manage the ones it has learned.
+ *
+ * The base model's vocabulary is necessarily finite. This is the escape hatch:
+ * demonstrate a pose ~40 times and it becomes a matchable class immediately, with
+ * no retraining and nothing leaving the device.
+ */
 export function GestureStudio({ gesture, onClose }: GestureStudioProps) {
-    const [isRecording, setIsRecording] = useState(false);
     const [samples, setSamples] = useState<Landmark[][]>([]);
-    const [gestureName, setGestureName] = useState("");
-    const [status, setStatus] = useState<"idle" | "recording" | "saving" | "complete">("idle");
+    const [name, setName] = useState("");
+    const [status, setStatus] = useState<"idle" | "recording" | "complete">("idle");
+    const [library, setLibrary] = useState<CustomGesture[]>([]);
+    const [notice, setNotice] = useState<{ text: string; kind: "info" | "error" } | null>(null);
+
+    const fileRef = useRef<HTMLInputElement>(null);
+
+    const refresh = () => setLibrary([...gestureStore.getGestures()]);
+    useEffect(refresh, []);
 
     useEffect(() => {
-        if (status === "recording" && gesture?.landmarks) {
-            if (samples.length < REQUIRED_SAMPLES) {
-                setSamples((prev) => [...prev, gesture.landmarks!]);
-            } else {
-                setStatus("complete");
-                setIsRecording(false);
-            }
-        }
-    }, [gesture, status, samples]);
+        if (status !== "recording" || !gesture?.landmarks) return;
+        setSamples((prev) => {
+            if (prev.length + 1 >= REQUIRED_SAMPLES) setStatus("complete");
+            return prev.length < REQUIRED_SAMPLES ? [...prev, gesture.landmarks!] : prev;
+        });
+    }, [gesture, status]);
 
-    const startRecording = () => {
-        if (!gestureName.trim()) {
-            alert("Please enter a gesture name first.");
+    const start = () => {
+        if (!name.trim()) {
+            setNotice({ text: "Name the gesture before recording.", kind: "error" });
             return;
         }
+        setNotice(null);
         setSamples([]);
         setStatus("recording");
-        setIsRecording(true);
     };
 
-    const saveGesture = () => {
-        if (samples.length >= REQUIRED_SAMPLES) {
-            setStatus("saving");
-            setTimeout(() => {
-                gestureStore.addGesture(gestureName, samples);
-                setStatus("idle");
-                setGestureName("");
-                setSamples([]);
-                onClose();
-            }, 1000);
+    const save = () => {
+        if (samples.length < REQUIRED_SAMPLES) return;
+        gestureStore.addGesture(name.trim(), samples);
+        setName("");
+        setSamples([]);
+        setStatus("idle");
+        refresh();
+        setNotice({ text: `Saved “${name.trim()}”.`, kind: "info" });
+    };
+
+    const exportPack = () => {
+        const pack = gestureStore.exportPack();
+        if (pack.gestures.length === 0) {
+            setNotice({ text: "Nothing to export yet.", kind: "error" });
+            return;
+        }
+        const blob = new Blob([JSON.stringify(pack, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `dextera-gestures-${new Date().toISOString().slice(0, 10)}.json`;
+        a.click();
+        // Revoking immediately can cancel the download in some browsers; one
+        // tick is enough for the click to be dispatched.
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+    };
+
+    const importPack = async (file: File) => {
+        try {
+            const report = gestureStore.importPack(JSON.parse(await file.text()));
+            refresh();
+            const parts = [`Imported ${report.imported}`];
+            if (report.skippedDuplicates.length) {
+                parts.push(`${report.skippedDuplicates.length} already present`);
+            }
+            if (report.rejected.length) {
+                parts.push(`${report.rejected.length} rejected`);
+            }
+            setNotice({
+                text: parts.join(" · "),
+                kind: report.imported > 0 ? "info" : "error",
+            });
+        } catch (err) {
+            setNotice({
+                text: err instanceof Error ? err.message : "Could not read that file.",
+                kind: "error",
+            });
         }
     };
 
+    const progress = Math.min(1, samples.length / REQUIRED_SAMPLES);
+
     return (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/80 backdrop-blur-xl animate-in fade-in duration-500">
-            <div className="spatial-card relative w-full max-w-xl rounded-[2.5rem] p-10 border-white/10">
-                <button
-                    onClick={onClose}
-                    className="absolute top-8 right-8 text-[#86868b] hover:text-white transition-colors"
-                >
-                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                </button>
-
-                <div className="flex flex-col items-center text-center">
-                    <div className="spatial-panel rounded-full px-4 py-1 mb-6">
-                        <span className="text-[10px] font-bold tracking-[0.3em] text-blue-500 uppercase italic">Experimental Lab</span>
+        <div className="modal-backdrop fixed inset-0 z-[110] flex items-center justify-center p-6">
+            <div className="panel-raised flex max-h-[86vh] w-full max-w-2xl flex-col">
+                <header className="flex items-baseline justify-between border-b border-[var(--rule)] px-8 py-6">
+                    <div>
+                        <span className="label">Few-shot</span>
+                        <h2 className="display mt-2 text-2xl text-[var(--ink)]">Studio</h2>
                     </div>
+                    <button onClick={onClose} className="label hover:text-[var(--ink)]">
+                        Close
+                    </button>
+                </header>
 
-                    <h2 className="text-3xl font-light tracking-tight text-white mb-4">Gesture Studio</h2>
-                    <p className="text-sm text-[#86868b] mb-12 max-w-sm">
-                        Capture a new spatial signature to expand DexteraAI's biometric library.
+                <div className="min-h-0 flex-1 overflow-y-auto px-8 py-6">
+                    <p className="max-w-md text-xs leading-relaxed text-[var(--ink-2)]">
+                        Demonstrate a pose {REQUIRED_SAMPLES} times and it becomes matchable
+                        straight away. Nothing is uploaded and no retraining happens — the
+                        samples are compared directly against what the camera sees.
                     </p>
 
-                    <div className="w-full space-y-8">
-                        <div className="relative group">
-                            <input
-                                type="text"
-                                placeholder="GESTURE_ID_NAME"
-                                value={gestureName}
-                                onChange={(e) => setGestureName(e.target.value)}
-                                disabled={status !== "idle"}
-                                className="w-full bg-white/[0.03] border border-white/10 rounded-2xl px-6 py-4 text-sm font-light tracking-widest text-white placeholder:text-white/10 focus:outline-none focus:border-blue-500/50 transition-all uppercase"
-                            />
-                            <div className="absolute right-4 top-1/2 -translate-y-1/2">
-                                <div className={`h-1.5 w-1.5 rounded-full ${gestureName ? "bg-blue-500" : "bg-white/10"}`} />
-                            </div>
+                    {/* Record */}
+                    <div className="mt-8">
+                        <div className="border-b border-[var(--rule)] pb-3">
+                            <span className="label">Record</span>
                         </div>
 
-                        {status === "idle" && (
+                        <input
+                            type="text"
+                            value={name}
+                            onChange={(e) => setName(e.target.value)}
+                            placeholder="Gesture name"
+                            disabled={status === "recording"}
+                            className="mono mt-5 w-full border border-[var(--rule-strong)] bg-[var(--field-1)] px-4 py-3 text-xs text-[var(--ink)] placeholder:text-[var(--ink-4)] focus:border-[var(--signal)] focus:outline-none disabled:opacity-40"
+                        />
+
+                        <div className="mt-5 flex items-baseline justify-between">
+                            <span className="label">
+                                {status === "recording"
+                                    ? "Hold the pose, vary the angle slightly"
+                                    : status === "complete"
+                                        ? "Ready to save"
+                                        : "Samples"}
+                            </span>
+                            <span className="readout text-xs text-[var(--ink)]">
+                                {samples.length} / {REQUIRED_SAMPLES}
+                            </span>
+                        </div>
+                        <div className="meter mt-2">
+                            <div className="meter-fill" style={{ width: `${progress * 100}%` }} />
+                        </div>
+
+                        <div className="mt-5 flex gap-3">
                             <button
-                                onClick={startRecording}
-                                className="w-full relative overflow-hidden group rounded-2xl bg-white px-8 py-5 transition-transform active:scale-[0.98]"
+                                onClick={start}
+                                disabled={status === "recording"}
+                                className={`btn ${status === "recording" ? "btn-signal" : ""} disabled:opacity-60`}
                             >
-                                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-black/[0.05] to-transparent animate-shimmer opacity-0 group-hover:opacity-100" />
-                                <span className="text-xs font-bold tracking-[0.3em] text-black uppercase">Start Capture</span>
+                                {status === "recording" ? "Recording" : "Record"}
                             </button>
-                        )}
-
-                        {(status === "recording" || status === "complete") && (
-                            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
-                                <div className="relative h-2 w-full rounded-full bg-white/5 overflow-hidden">
-                                    <div
-                                        className="h-full bg-blue-500 transition-all duration-300"
-                                        style={{ width: `${(samples.length / REQUIRED_SAMPLES) * 100}%` }}
-                                    />
-                                </div>
-                                <div className="flex justify-between items-center">
-                                    <span className="text-[10px] font-mono tracking-widest text-white/30 uppercase">
-                                        {status === "recording" ? "Collecting_Samples..." : "Capture_Complete"}
-                                    </span>
-                                    <span className="text-[10px] font-mono text-blue-500">
-                                        {samples.length}/{REQUIRED_SAMPLES}__FRM
-                                    </span>
-                                </div>
-                            </div>
-                        )}
-
-                        {status === "complete" && (
                             <button
-                                onClick={saveGesture}
-                                className="w-full relative overflow-hidden group rounded-2xl border border-blue-500/30 bg-blue-500/10 px-8 py-5 transition-transform active:scale-[0.98] animate-in fade-in"
+                                onClick={save}
+                                disabled={status !== "complete"}
+                                className="btn btn-solid disabled:cursor-not-allowed disabled:opacity-25"
                             >
-                                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-blue-500/10 to-transparent animate-shimmer" />
-                                <span className="text-xs font-bold tracking-[0.3em] text-blue-500 uppercase">Commit to Local Vault</span>
+                                Save gesture
                             </button>
-                        )}
-
-                        {status === "saving" && (
-                            <div className="flex flex-col items-center gap-4 py-4">
-                                <div className="h-2 w-2 rounded-full bg-blue-500 animate-ping" />
-                                <span className="text-[10px] font-mono tracking-[0.3em] text-white/40 uppercase animate-pulse">Synchronizing_Signatures</span>
-                            </div>
-                        )}
+                        </div>
                     </div>
-                </div>
 
-                <div className="mt-16 pt-8 border-t border-white/[0.03]">
-                    <div className="flex items-start gap-4">
-                        <div className="mt-1 p-2 rounded-lg bg-blue-500/10">
-                            <svg className="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                            </svg>
+                    {/* Library */}
+                    <div className="mt-12">
+                        <div className="flex items-baseline justify-between border-b border-[var(--rule)] pb-3">
+                            <span className="label">Your gestures</span>
+                            <span className="readout text-[10px] text-[var(--ink-3)]">
+                                {library.length}
+                            </span>
                         </div>
-                        <p className="text-[10px] leading-relaxed text-[#86868b] uppercase tracking-wider">
-                            Move your hand naturally while recording. The engine captures 40 spatial snapshots to create a high-fidelity biometric template.
+
+                        {library.length === 0 ? (
+                            <p className="label py-5">None taught yet</p>
+                        ) : (
+                            <div className="mt-2">
+                                {library.map((g) => (
+                                    <div
+                                        key={g.id}
+                                        className="flex items-baseline justify-between gap-4 border-b border-[var(--rule-2)] py-3"
+                                    >
+                                        <span className="mono text-xs text-[var(--ink)]">{g.name}</span>
+                                        <div className="flex items-baseline gap-5">
+                                            <span className="readout text-[10px] text-[var(--ink-3)]">
+                                                {g.samples.length} samples
+                                            </span>
+                                            <button
+                                                onClick={() => {
+                                                    gestureStore.deleteGesture(g.id);
+                                                    refresh();
+                                                }}
+                                                className="label hover:text-[var(--alert)]"
+                                            >
+                                                Delete
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        <div className="mt-5 flex gap-3">
+                            <button onClick={exportPack} className="btn">
+                                Export pack
+                            </button>
+                            <button onClick={() => fileRef.current?.click()} className="btn">
+                                Import pack
+                            </button>
+                            <input
+                                ref={fileRef}
+                                type="file"
+                                accept="application/json,.json"
+                                className="hidden"
+                                onChange={(e) => {
+                                    const file = e.target.files?.[0];
+                                    if (file) void importPack(file);
+                                    // Clear the input, or selecting the same file
+                                    // twice in a row fires no change event.
+                                    e.target.value = "";
+                                }}
+                            />
+                        </div>
+                        <p className="mt-4 max-w-md text-[11px] leading-relaxed text-[var(--ink-3)]">
+                            A pack is a JSON file of landmark coordinates — no images, no video.
+                            It moves your gestures to another browser or machine, which is
+                            otherwise impossible since they live only in this browser&apos;s
+                            local storage.
                         </p>
                     </div>
                 </div>
+
+                <footer className="border-t border-[var(--rule)] px-8 py-5">
+                    <span
+                        className="label"
+                        style={{
+                            color:
+                                notice?.kind === "error" ? "var(--alert)" : "var(--ink-3)",
+                        }}
+                    >
+                        {notice?.text ?? "Stored on this device only"}
+                    </span>
+                </footer>
             </div>
         </div>
     );

@@ -1,9 +1,20 @@
 /**
- * ActionRegistry — Industrial-grade dynamic gesture-to-action mapper.
- * 
- * Manages the "Action Library" and persistent user mappings between 
- * recognized Gesture IDs and specific system/browser actions.
+ * ActionRegistry — maps recognised gestures to actions.
+ *
+ * Bindings are keyed by gesture **label**, not by class index. Index is a
+ * property of whichever model bundle happens to be loaded: id 2 is "fist" under
+ * the HaGRID vocabulary and "closed_fist" under the built-in fallback, and the
+ * ASL bundle reuses the same integers for letters. Persisting indices means a
+ * user's bindings silently rebind themselves to unrelated gestures the moment
+ * the active bundle changes, which is exactly what happened here.
+ *
+ * Dispatch is driven by segment onsets rather than raw frames — see
+ * `gesture-segmenter.ts`. The classifier scores ~30 frames a second, so a
+ * frame-driven binding would fire a non-idempotent action 30 times for one
+ * held pose.
  */
+
+import type { GestureResult } from "./gesture-engine";
 
 export type ActionCategory = "media" | "navigation" | "system" | "custom";
 
@@ -22,11 +33,18 @@ export class ActionRegistry {
     // The Library: All available actions the system can perform
     private actionLibrary: Map<string, GestureAction> = new Map();
 
-    // The Mappings: GestureID -> ActionID
-    private mappings: Map<number, string> = new Map();
+    /** Gesture label -> action id. */
+    private mappings: Map<string, string> = new Map();
 
-    private lastActionTime: number = 0;
-    private COOLDOWN_MS = 1000;
+    /** Last dispatch time per action, for the per-action cooldown. */
+    private lastFiredAt: Map<string, number> = new Map();
+
+    /**
+     * Floor between two dispatches of the same action. The segmenter already
+     * guarantees one event per gesture, so this only guards against a user
+     * genuinely repeating a pose faster than the action can absorb.
+     */
+    private cooldownMs = 250;
 
     private constructor() {
         this.initializeActionLibrary();
@@ -123,27 +141,51 @@ export class ActionRegistry {
     private loadMappings() {
         if (typeof window === "undefined") return;
         const saved = localStorage.getItem(ActionRegistry.STORAGE_KEY);
-        if (saved) {
-            try {
-                const data = JSON.parse(saved);
-                this.mappings = new Map(Object.entries(data).map(([k, v]) => [Number(k), String(v)]));
-            } catch (e) {
-                console.error("DexteraAI: Failed to load mappings", e);
+        if (!saved) {
+            this.setDefaults();
+            return;
+        }
+        try {
+            const data = JSON.parse(saved) as Record<string, string>;
+            const entries = Object.entries(data);
+
+            // Anything stored under a numeric key predates label-based
+            // bindings. Those keys indexed a vocabulary that was never
+            // actually loaded at runtime, so migrating them would carry the
+            // mis-binding forward. Discard and re-seed instead.
+            if (entries.length > 0 && entries.every(([k]) => /^\d+$/.test(k))) {
+                console.warn(
+                    "ActionRegistry: discarding legacy index-keyed bindings; re-seeding defaults"
+                );
                 this.setDefaults();
+                return;
             }
-        } else {
+
+            this.mappings = new Map(entries.map(([k, v]) => [k, String(v)]));
+        } catch (e) {
+            console.error("ActionRegistry: failed to load mappings", e);
             this.setDefaults();
         }
     }
 
+    /**
+     * Seed bindings for the shipped general-purpose vocabulary.
+     *
+     * These are HaGRID labels, matching `models/hagrid/labels.json`. A label
+     * absent from the active bundle simply never fires, so seeding a superset
+     * is harmless.
+     */
     private setDefaults() {
-        // Default Industrial Mappings (Stabilized)
-        this.mappings.set(1, "media_toggle");      // Open Palm
-        this.mappings.set(5, "media_toggle");      // Peace Sign (Safely remapped from nav_back)
-        this.mappings.set(3, "media_toggle");      // Thumbs Up
-        this.mappings.set(6, "nav_scroll_up");     // Pointing Up
-        this.mappings.set(4, "nav_scroll_down");   // Thumbs Down
-        this.mappings.set(9, "sys_status_reset");  // Wave
+        this.mappings = new Map([
+            ["palm", "media_toggle"],
+            ["fist", "sys_lock"],
+            ["like", "nav_scroll_up"],
+            ["dislike", "nav_scroll_down"],
+            ["peace", "deck_next"],
+            ["ok", "sys_status_reset"],
+            ["one", "deck_prev"],
+            ["stop", "media_toggle"],
+        ]);
         this.saveMappings();
     }
 
@@ -153,35 +195,45 @@ export class ActionRegistry {
         localStorage.setItem(ActionRegistry.STORAGE_KEY, JSON.stringify(data));
     }
 
-    /**
-     * Remap a gesture to a specific action.
-     */
-    public remap(gestureId: number, actionId: string | null) {
+    /** Bind a gesture label to an action, or unbind it with `null`. */
+    public remap(gestureName: string, actionId: string | null) {
         if (actionId === null) {
-            this.mappings.delete(gestureId);
+            this.mappings.delete(gestureName);
         } else {
-            this.mappings.set(gestureId, actionId);
+            this.mappings.set(gestureName, actionId);
         }
         this.saveMappings();
-        console.log(`DexteraAI: Remapped Gesture ${gestureId} -> ${actionId}`);
     }
 
-    public async trigger(gestureId: number, confidence: number): Promise<GestureAction | null> {
-        const actionId = this.mappings.get(gestureId);
+    /**
+     * Dispatch the action bound to a completed gesture onset.
+     *
+     * Callers must pass an `onset` event only. Passing every frame would fire
+     * the bound action for the entire duration of a held pose; that is the
+     * caller's responsibility because only the caller knows whether it is
+     * consuming raw frames or segment events.
+     */
+    public dispatch(result: GestureResult): GestureAction | null {
+        if (result.phase !== "onset" || result.rejected) return null;
+
+        const actionId = this.mappings.get(result.gestureName);
         if (!actionId) return null;
 
         const action = this.actionLibrary.get(actionId);
         if (!action) return null;
 
         const now = Date.now();
-        if (now - this.lastActionTime < this.COOLDOWN_MS) return null;
+        const last = this.lastFiredAt.get(action.id) ?? 0;
+        if (now - last < this.cooldownMs) return null;
 
-        // Minimum confidence check (can be dynamic via Calibrator elsewhere)
-        if (confidence < 0.1) return null; // Logic handled in dashboard loop
-
-        console.log(`DexteraAI: Executing Tactical Action [${action.id}]`);
-        action.execute();
-        this.lastActionTime = now;
+        try {
+            action.execute();
+        } catch (err) {
+            // One misbehaving action must not take down the recognition loop.
+            console.error(`ActionRegistry: action "${action.id}" threw`, err);
+            return null;
+        }
+        this.lastFiredAt.set(action.id, now);
         return action;
     }
 
@@ -198,8 +250,19 @@ export class ActionRegistry {
         return Array.from(this.actionLibrary.values());
     }
 
-    public getMappings(): Map<number, string> {
+    public getMappings(): Map<string, string> {
         return new Map(this.mappings);
+    }
+
+    /** Action currently bound to a label, if any. */
+    public getBinding(gestureName: string): GestureAction | undefined {
+        const id = this.mappings.get(gestureName);
+        return id ? this.actionLibrary.get(id) : undefined;
+    }
+
+    /** Register an action at runtime, e.g. from a plugin. */
+    public registerAction(action: GestureAction): void {
+        this.actionLibrary.set(action.id, action);
     }
 
     public getActionById(actionId: string): GestureAction | undefined {

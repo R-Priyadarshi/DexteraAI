@@ -3,11 +3,13 @@
 import { type GestureResult } from "./gesture-engine";
 import { type VoiceIntent } from "./voice-engine";
 import { hapticEngine } from "./haptic-engine";
+import { actionRegistry } from "./action-registry";
 
 export interface FusedAction {
     id: string;
     name: string;
-    gestureId: number;
+    /** Gesture label, not class index — see `action-registry.ts`. */
+    gestureName: string;
     voiceIntent: VoiceIntent;
     execute: () => void;
     feedbackType: "success" | "error" | "light";
@@ -19,18 +21,22 @@ interface TemporalIntent {
 }
 
 interface TemporalGesture {
-    gestureId: number;
+    gestureName: string;
     timestamp: number;
 }
 
 /**
- * IntentRefinery — Probabilistic Multi-modal Fusion Engine.
- * 
- * Instead of instantaneous matching, this engine uses a temporal window
- * (typically 2 seconds) to fuse voice commands and physical gestures.
- * 
- * This allows for more natural interaction: e.g., saying "Abort" and 
- * then performing a peace sign within 1.5 seconds.
+ * Fuses a gesture with a spoken intent, requiring both within a short window.
+ *
+ * Requiring two independent modalities to agree is a deliberate safety
+ * property, not a convenience: it makes accidental triggering effectively
+ * impossible, which is what an irreversible action needs. A hand that drifts
+ * into a pose cannot fire one, and neither can a word overheard in
+ * conversation.
+ *
+ * Order does not matter — saying "abort" then raising a hand works as well as
+ * the reverse — because forcing one order makes the interaction feel like a
+ * password rather than a confirmation.
  */
 export class IntentRefinery {
     private static instance: IntentRefinery;
@@ -55,43 +61,48 @@ export class IntentRefinery {
         return IntentRefinery.instance;
     }
 
+    /**
+     * Default fusions, keyed to the shipped general-purpose vocabulary.
+     *
+     * Each one runs a real registry action. A fusion whose only effect is a log
+     * line is worse than no fusion at all, because it teaches the user the
+     * interaction works when nothing is actually bound to it.
+     */
     private initializeDefaults() {
-        // Emergency Abort: Peace Sign (5) + "Abort"
+        const run = (actionId: string) => () => {
+            const action = actionRegistry.getActionById(actionId);
+            if (!action) {
+                console.warn(`IntentRefinery: no action "${actionId}" registered`);
+                return;
+            }
+            action.execute();
+        };
+
         this.register({
-            id: "fusion_abort",
-            name: "Emergency Abort",
-            gestureId: 5,
+            id: "fusion_halt",
+            name: "Emergency halt",
+            gestureName: "stop",
             voiceIntent: "abort",
             feedbackType: "error",
-            execute: () => {
-                console.log("IntentRefinery: EMERGENCY ABORT EXECUTED.");
-                // Dispatch system-wide halt
-                window.dispatchEvent(new CustomEvent("dextera_sys_halt"));
-            }
+            execute: run("sys_lock"),
         });
 
-        // Stealth Mode: Closed Fist (2) + "Stealth" (Redirect Disabled)
         this.register({
-            id: "fusion_stealth",
-            name: "Visual Stealth",
-            gestureId: 2,
-            voiceIntent: "stealth",
+            id: "fusion_confirm",
+            name: "Confirm",
+            gestureName: "ok",
+            voiceIntent: "confirm",
             feedbackType: "success",
-            execute: () => {
-                console.log("DexteraAI: Stealth redirect disabled for industrial continuity.");
-            }
+            execute: run("media_toggle"),
         });
 
-        // Mission Launch: Thumbs Up (3) + "Launch"
         this.register({
-            id: "fusion_launch",
-            name: "Industrial Launch",
-            gestureId: 3,
-            voiceIntent: "launch",
-            feedbackType: "success",
-            execute: () => {
-                console.log("IntentRefinery: MISSION LAUNCH SEQUENCE START.");
-            }
+            id: "fusion_reset",
+            name: "Reset tracking",
+            gestureName: "palm",
+            voiceIntent: "reset",
+            feedbackType: "light",
+            execute: run("sys_status_reset"),
         });
     }
 
@@ -112,8 +123,11 @@ export class IntentRefinery {
         if (voice) {
             this.voiceBuffer.push({ intent: voice, timestamp: now });
         }
-        if (gesture.gestureId !== -1 && gesture.confidence > 0.9) {
-            this.gestureBuffer.push({ gestureId: gesture.gestureId, timestamp: now });
+        // Onsets only. Buffering every frame of a held pose would fill the
+        // window with 60 copies of the same gesture and make the "consume both
+        // triggers" step below meaningless.
+        if (gesture.phase === "onset" && !gesture.rejected) {
+            this.gestureBuffer.push({ gestureName: gesture.gestureName, timestamp: now });
         }
 
         // 3. Purge Stale Data
@@ -125,15 +139,13 @@ export class IntentRefinery {
         // 4. Fusion Matcher (Cross-Product search within windows)
         for (const action of this.fusedActions) {
             const voiceMatch = this.voiceBuffer.find(v => v.intent === action.voiceIntent);
-            const gestureMatch = this.gestureBuffer.find(g => g.gestureId === action.gestureId);
+            const gestureMatch = this.gestureBuffer.find(g => g.gestureName === action.gestureName);
 
             if (voiceMatch && gestureMatch) {
                 // Determine which came first (for potentially different logic, currently just fuse)
                 const timeDiff = Math.abs(voiceMatch.timestamp - gestureMatch.timestamp);
                 
                 if (timeDiff < this.FUSION_WINDOW_MS) {
-                    console.log(`IntentRefinery: Fusion Successful [${action.name}] (dt: ${timeDiff}ms)`);
-                    
                     // Consume both triggers to prevent double-firing
                     this.voiceBuffer = this.voiceBuffer.filter(v => v !== voiceMatch);
                     this.gestureBuffer = this.gestureBuffer.filter(g => g !== gestureMatch);

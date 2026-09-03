@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { GestureEngine, type GestureResult } from "@/lib/gesture-engine";
-import { ActionRegistry, type GestureAction } from "@/lib/action-registry";
+import { type GestureAction } from "@/lib/action-registry";
 import { PluginEngine } from "@/lib/plugin-engine";
 import { PresentationPlugin } from "@/lib/plugins/presentation";
 import { BiometricGuard } from "@/components/BiometricGuard";
@@ -17,8 +18,10 @@ import { FusionMonitor } from "@/components/FusionMonitor";
 import { calibrator, type CalibrationMetrics } from "@/lib/calibrator";
 import { SpatialDeck } from "@/components/SpatialDeck";
 import { ActionMapper } from "@/components/ActionMapper";
+import { actionRegistry } from "@/lib/action-registry";
 import { CalibrationWizard } from "@/components/CalibrationWizard";
 import { biometricEngine } from "@/lib/biometric-engine";
+import { Sparkline, StatusFlag } from "@/components/Telemetry";
 
 /**
  * Trained model bundles. Each directory holds gesture.onnx + labels.json, so the
@@ -26,24 +29,19 @@ import { biometricEngine } from "@/lib/biometric-engine";
  * Produced by: python dextera.py train --export models/<name>
  */
 const MODEL_BUNDLES = [
-    { id: "hagrid", name: "General Gestures", url: "/onnx/hagrid/gesture.onnx" },
-    { id: "asl_alphabet", name: "ASL Fingerspelling", url: "/onnx/asl_alphabet/gesture.onnx" },
+    { id: "hagrid", name: "General gestures", url: "/onnx/hagrid/gesture.onnx", classes: 18 },
+    { id: "asl_alphabet", name: "ASL fingerspelling", url: "/onnx/asl_alphabet/gesture.onnx", classes: 26 },
 ] as const;
 
 type BundleId = (typeof MODEL_BUNDLES)[number]["id"];
 
-export default function Home() {
+const LATENCY_WINDOW = 60;
+
+export default function Console() {
     const videoRef = useRef<HTMLVideoElement>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const engineRef = useRef<GestureEngine | null>(null);
-    const actionRegistry = ActionRegistry.getInstance();
     const pluginEngine = PluginEngine.getInstance();
-
-    // Neural Versioning: Synchronous Initialization
-    const BUILD_ID = "v5.8.5-FINAL";
-    if (typeof window !== "undefined") {
-        (window as any).DEXTERA_BUILD = BUILD_ID;
-    }
 
     const [isRunning, setIsRunning] = useState(false);
     const [bundleId, setBundleId] = useState<BundleId>("hagrid");
@@ -51,58 +49,39 @@ export default function Home() {
     const [gesture, setGesture] = useState<GestureResult | null>(null);
     const [fps, setFps] = useState(0);
     const [latency, setLatency] = useState(0);
+    const [latencyHistory, setLatencyHistory] = useState<number[]>([]);
     const [error, setError] = useState<string | null>(null);
-    const [engineStatus, setEngineStatus] = useState("OFFLINE");
     const isProcessingRef = useRef(false);
-    const lastResultRef = useRef<GestureResult | null>(null);
 
-    const [recentActions, setRecentActions] = useState<{ action: GestureAction, timestamp: number }[]>([]);
+    const [recentActions, setRecentActions] = useState<{ action: GestureAction; timestamp: number }[]>([]);
     const [isLocked, setIsLocked] = useState(true);
     const [isStudioOpen, setIsStudioOpen] = useState(false);
     const [isMacroOpen, setIsMacroOpen] = useState(false);
     const [isMapperOpen, setIsMapperOpen] = useState(false);
     const [isCalibrating, setIsCalibrating] = useState(false);
-    const [isActionActive, setIsActionActive] = useState(false);
-    const [memoryLog, setMemoryLog] = useState("INIT_CORE...");
-    const heatmapEnabledRef = useRef(false);
-    const [heatmapEnabledState, setHeatmapEnabledState] = useState(false); // For UI sync
-    const heatmapBufferRef = useRef<{ x: number, y: number, t: number }[]>([]);
     const [activeMacro, setActiveMacro] = useState<string | null>(null);
     const [voiceIntent, setVoiceIntent] = useState<VoiceIntent | null>(null);
     const [isVoiceActive, setIsVoiceActive] = useState(false);
-    const [isHapticActive, setIsHapticActive] = useState(false);
     const [lastFusedAction, setLastFusedAction] = useState<FusedAction | null>(null);
+    const [calibration, setCalibration] = useState<CalibrationMetrics>({
+        stability: 1,
+        lighting: 1,
+        latencyJitter: 0,
+    });
+
     const isLockedRef = useRef(isLocked);
     const voiceIntentRef = useRef(voiceIntent);
-    
     useEffect(() => { isLockedRef.current = isLocked; }, [isLocked]);
     useEffect(() => { voiceIntentRef.current = voiceIntent; }, [voiceIntent]);
-    const [calibration, setCalibration] = useState<CalibrationMetrics>({ stability: 1, lighting: 1, latencyJitter: 0 });
-
-    // Neural Chromatics: Dynamic background glow based on system state
-    const getGlowColor = () => {
-        if (isLocked) return "rgba(239, 68, 68, 0.05)"; // Red alert
-        if (isCalibrating) return "rgba(245, 158, 11, 0.08)"; // Amber calibration
-        if (isActionActive) return "rgba(52, 211, 153, 0.12)"; // Emerald success
-        return "rgba(6, 182, 212, 0.05)"; // Industrial Cyan
-    };
 
     const startCamera = useCallback(async () => {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({
-                video: {
-                    facingMode: "user",
-                    width: { ideal: 1280 },
-                    height: { ideal: 720 }
-                },
+                video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
             });
 
             if (videoRef.current) {
                 videoRef.current.srcObject = stream;
-                stream.getVideoTracks().forEach(track => {
-                    console.log(`DexteraAI: Camera track acquired [${track.label}] - Status: ${track.readyState}`);
-                    track.onended = () => console.warn(`DexteraAI: Camera track TERMINATED externally [${track.label}]`);
-                });
                 await videoRef.current.play();
             }
 
@@ -116,14 +95,13 @@ export default function Home() {
             engineRef.current = engine;
             setVocabulary(engine.getLabels());
 
-            // Initialize Voice Engine only on manual start
             voiceEngine.start({
                 onIntent: (intent) => {
                     setVoiceIntent(intent);
                     setTimeout(() => setVoiceIntent(null), 2000);
-                    if (intent === "stealth") console.log("DexteraAI: Voice stealth triggered (redirect disabled)");
                 },
-                onStatus: (status) => setIsVoiceActive(status === "listening" || status === "processing")
+                onStatus: (status) =>
+                    setIsVoiceActive(status === "listening" || status === "processing"),
             });
 
             setIsRunning(true);
@@ -132,28 +110,23 @@ export default function Home() {
             hapticEngine.pulse("success");
         } catch (err) {
             setError(
-                `Biometric access denied: ${err instanceof Error ? err.message : String(err)}`
+                `Camera unavailable: ${err instanceof Error ? err.message : String(err)}`
             );
         }
     }, [bundleId]);
 
-    // Decommissioned erratic sync useEffect in favor of In-Loop Sync
-
-    // useCallback with a stable identity: an effect below depends on this and
-    // calls stopCamera() in its cleanup. Recreating it each render made that
-    // effect tear the camera down and re-register plugins on every state
-    // update, and the frame loop updates state ~10x a second.
+    // Stable identity: an effect below calls stopCamera() in its cleanup.
+    // Recreating it each render tore the camera down on every state update,
+    // and the frame loop updates state ~10x a second.
     const stopCamera = useCallback(() => {
-        // 1. Release Hardware Tracks
         if (videoRef.current?.srcObject) {
-            (videoRef.current.srcObject as MediaStream).getTracks().forEach(track => {
-                track.stop();
-                console.log("[SYS] CAMERA_TRACK_TERMINATED:", track.label);
-            });
+            (videoRef.current.srcObject as MediaStream)
+                .getTracks()
+                .forEach((track) => track.stop());
             videoRef.current.srcObject = null;
         }
-        // Release the engine's ONNX session and MediaPipe WebGL context.
-        // Nulling the ref alone leaks a WebGL context per boot.
+        // Release the ONNX session and MediaPipe WebGL context. Nulling the ref
+        // alone leaks a WebGL context per boot.
         engineRef.current?.dispose();
         engineRef.current = null;
         setIsRunning(false);
@@ -163,16 +136,69 @@ export default function Home() {
         hapticEngine.pulse("sonar_ping");
     }, []);
 
-    // Stable Refs for Persistent Loop Data
     const frameCountRef = useRef(0);
-    const lastFpsTimeRef = useRef(performance.now());
+    const lastFpsTimeRef = useRef(0);
     const lastStateUpdateTimeRef = useRef(0);
     const loopRef = useRef<number | null>(null);
 
-    // Sync lock state ref for the high-speed loop
-    useEffect(() => {
-        isLockedRef.current = isLocked;
-    }, [isLocked]);
+    const drawLandmarks = useCallback((canvas: HTMLCanvasElement, result: GestureResult) => {
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+
+        const rect = canvas.getBoundingClientRect();
+        if (canvas.width !== rect.width || canvas.height !== rect.height) {
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+        }
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        if (!result.landmarks || result.landmarks.length < 10) return;
+
+        const CONNECTIONS = [
+            [0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8],
+            [0, 9], [9, 10], [10, 11], [11, 12], [0, 13], [13, 14], [14, 15], [15, 16],
+            [0, 17], [17, 18], [18, 19], [19, 20], [5, 9], [9, 13], [13, 17],
+        ];
+
+        // The video is mirrored in CSS but the canvas is not, so landmark x is
+        // flipped here to land the skeleton over the hand as displayed.
+        const px = (p: { x: number; y: number }) => ({
+            x: (1.0 - p.x) * canvas.width,
+            y: p.y * canvas.height,
+        });
+
+        ctx.strokeStyle = "#ffb627";
+        ctx.lineWidth = 2;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        for (const [i, j] of CONNECTIONS) {
+            const a = result.landmarks[i];
+            const b = result.landmarks[j];
+            if (!a || !b) continue;
+            const pa = px(a);
+            const pb = px(b);
+            ctx.moveTo(pa.x, pa.y);
+            ctx.lineTo(pb.x, pb.y);
+        }
+        ctx.stroke();
+
+        const tips = new Set([4, 8, 12, 16, 20]);
+        result.landmarks.forEach((p, i) => {
+            const c = px(p);
+            ctx.beginPath();
+            ctx.arc(c.x, c.y, i === 0 ? 5 : tips.has(i) ? 4 : 2.5, 0, Math.PI * 2);
+            if (i === 0 || tips.has(i)) {
+                ctx.fillStyle = "#ffb627";
+                ctx.fill();
+            } else {
+                ctx.fillStyle = "#0a0a0b";
+                ctx.fill();
+                ctx.strokeStyle = "#ffb627";
+                ctx.lineWidth = 1.2;
+                ctx.stroke();
+            }
+        });
+    }, []);
 
     useEffect(() => {
         if (!isRunning || !engineRef.current) {
@@ -183,13 +209,12 @@ export default function Home() {
         const loop = async () => {
             const video = videoRef.current;
             const canvas = canvasRef.current;
-            
+
             if (!video || !canvas || !engineRef.current || video.readyState < 2) {
                 loopRef.current = requestAnimationFrame(loop);
                 return;
             }
 
-            // 1. Synchronize Loop
             loopRef.current = requestAnimationFrame(loop);
 
             if (!isProcessingRef.current) {
@@ -199,13 +224,19 @@ export default function Home() {
                     const ctx = canvas.getContext("2d");
 
                     if (result) {
-                        // Hardware-locked rendering
                         drawLandmarks(canvas, result);
                         calibrator.record(result.landmarks);
 
                         const now = performance.now();
                         if (now - lastStateUpdateTimeRef.current > 100) {
-                            setLatency(Math.round(result.inferenceTimeMs));
+                            const ms = Math.round(result.inferenceTimeMs);
+                            setLatency(ms);
+                            setLatencyHistory((h) => {
+                                const next = [...h, result.inferenceTimeMs];
+                                return next.length > LATENCY_WINDOW
+                                    ? next.slice(-LATENCY_WINDOW)
+                                    : next;
+                            });
                             setGesture(result);
                             setCalibration(calibrator.getMetrics());
                             lastStateUpdateTimeRef.current = now;
@@ -213,6 +244,18 @@ export default function Home() {
 
                         if (!isLockedRef.current) {
                             pluginEngine.broadcast(result);
+
+                            // Bound actions fire on segment onset only. The
+                            // registry enforces that, but the log below must
+                            // also only record real dispatches.
+                            const fired = actionRegistry.dispatch(result);
+                            if (fired) {
+                                hapticEngine.pulse("light");
+                                setRecentActions((log) =>
+                                    [{ action: fired, timestamp: Date.now() }, ...log].slice(0, 40)
+                                );
+                            }
+
                             const macroMatch = macroEngine.process(result);
                             if (macroMatch) setActiveMacro(macroMatch.name);
 
@@ -220,366 +263,416 @@ export default function Home() {
                             if (fusedMatch) {
                                 setLastFusedAction(fusedMatch);
                                 fusedMatch.execute();
-                                hapticEngine.pulse(fusedMatch.feedbackType === "error" ? "error" : "light");
+                                hapticEngine.pulse(
+                                    fusedMatch.feedbackType === "error" ? "error" : "light"
+                                );
+                                // Record it, so the log reflects real dispatches.
+                                setRecentActions((log) =>
+                                    [
+                                        {
+                                            action: {
+                                                id: fusedMatch.id,
+                                                name: fusedMatch.name,
+                                            } as GestureAction,
+                                            timestamp: Date.now(),
+                                        },
+                                        ...log,
+                                    ].slice(0, 40)
+                                );
                             }
                         }
                     } else if (ctx) {
-                        // No result this frame: clear the overlay.
                         ctx.clearRect(0, 0, canvas.width, canvas.height);
                     }
                     isProcessingRef.current = false;
-            } catch (err) {
-                console.error("DexteraAI Loop Error:", err);
-                isProcessingRef.current = false;
-            }
+                } catch {
+                    isProcessingRef.current = false;
+                }
             }
 
             frameCountRef.current++;
-            if (performance.now() - lastFpsTimeRef.current >= 1000) {
+            const t = performance.now();
+            if (t - lastFpsTimeRef.current >= 1000) {
                 setFps(frameCountRef.current);
                 frameCountRef.current = 0;
-                lastFpsTimeRef.current = performance.now();
+                lastFpsTimeRef.current = t;
             }
         };
-        
+
         loopRef.current = requestAnimationFrame(loop);
         return () => {
             if (loopRef.current) cancelAnimationFrame(loopRef.current);
         };
-    }, [isRunning]); // ONLY restart on hard boot/shutdown
-
-    const drawLandmarks = (canvas: HTMLCanvasElement, result: GestureResult) => {
-        const ctx = canvas.getContext("2d");
-        if (!ctx || !result.landmarks || result.landmarks.length < 10) return;
-
-        ctx.strokeStyle = "#00ffff";
-        ctx.lineWidth = 4;
-        ctx.shadowBlur = 10;
-        ctx.shadowColor = "#00ffff";
-        
-        const GESTURE_CONNECTIONS = [
-            [0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8],
-            [0, 9], [9, 10], [10, 11], [11, 12], [0, 13], [13, 14], [14, 15], [15, 16],
-            [0, 17], [17, 18], [18, 19], [19, 20], [5, 9], [9, 13], [13, 17]
-        ];
-
-        GESTURE_CONNECTIONS.forEach(([i, j]) => {
-            const p1 = result.landmarks![i];
-            const p2 = result.landmarks![j];
-            ctx.moveTo((1.0 - p1.x) * canvas.width, p1.y * canvas.height);
-            ctx.lineTo((1.0 - p2.x) * canvas.width, p2.y * canvas.height);
-        });
-        ctx.stroke();
-
-        result.landmarks.forEach((p) => {
-            ctx.beginPath();
-            ctx.arc((1.0 - p.x) * canvas.width, p.y * canvas.height, 5, 0, Math.PI * 2);
-            ctx.fillStyle = "#00ffff";
-            ctx.fill();
-        });
-    };
+    }, [isRunning, drawLandmarks, pluginEngine]);
 
     useEffect(() => {
-        const handleHaptic = () => {
-            setIsHapticActive(true);
-            setTimeout(() => setIsHapticActive(false), 150);
-        };
-
         const handleSysHalt = () => {
-            console.log("DexteraAI: SYSTEM HALT SIGNAL RECEIVED.");
             stopCamera();
             setIsLocked(true);
-            setError("SYSTEM_HALT: Emergency Abort Pattern Recognized.");
+            setError("Stopped — abort gesture recognised.");
         };
-
         const handleSysReset = () => {
-            console.log("DexteraAI: SYSTEM RESET SIGNAL RECEIVED.");
             setRecentActions([]);
             setLastFusedAction(null);
             hapticEngine.pulse("success");
         };
 
-        window.addEventListener("dextera-haptic", handleHaptic);
         window.addEventListener("dextera_sys_halt", handleSysHalt);
         window.addEventListener("dextera_sys_reset", handleSysReset);
         pluginEngine.register(PresentationPlugin);
         return () => {
             stopCamera();
-            window.removeEventListener("dextera-haptic", handleHaptic);
             window.removeEventListener("dextera_sys_halt", handleSysHalt);
             window.removeEventListener("dextera_sys_reset", handleSysReset);
         };
     }, [stopCamera, pluginEngine]);
 
+    useEffect(() => {
+        if (!error) return;
+        const t = setTimeout(() => setError(null), 4000);
+        return () => clearTimeout(t);
+    }, [error]);
 
+    const detected = Boolean(gesture && gesture.gestureId !== -1 && gesture.landmarks?.length);
+    const activeBundle = MODEL_BUNDLES.find((b) => b.id === bundleId) ?? MODEL_BUNDLES[0];
+    const wrist = gesture?.landmarks?.[0];
 
     return (
-        <main className="relative flex min-h-screen w-full flex-col bg-[#020203] font-sans text-white antialiased selection:bg-cyan-500/30 overflow-x-hidden overflow-y-auto custom-scrollbar">
-            {/* Neural Background Layer (Fixed) */}
-            <div className="fixed inset-0 hex-grid opacity-[0.03] pointer-events-none" />
-            <div className="fixed inset-0 scanlines pointer-events-none z-50 opacity-[0.05]" />
-            
-            {/* Reactive Neural Chromatics */}
-            <div 
-                className="fixed inset-0 pointer-events-none transition-all duration-1000 ease-in-out z-0"
-                style={{ background: `radial-gradient(circle at 50% 50%, ${getGlowColor()} 0%, transparent 70%)` }}
-            />
-            
-            {/* Biometric Security Overlay Removed from here */}
-
-            {/* Gesture Studio Portal */}
-            {isStudioOpen && (
-                <GestureStudio gesture={gesture} onClose={() => setIsStudioOpen(false)} />
-            )}
-
-            {/* Action Mapper Portal */}
+        <main className="min-h-screen">
+            {/* Modals */}
+            {isStudioOpen && <GestureStudio gesture={gesture} onClose={() => setIsStudioOpen(false)} />}
             {isMapperOpen && (
-                <ActionMapper onClose={() => setIsMapperOpen(false)} />
+                <ActionMapper vocabulary={vocabulary} onClose={() => setIsMapperOpen(false)} />
             )}
-
-            {/* Calibration Wizard Portal */}
+            {isMacroOpen && <MacroComposer gesture={gesture} onClose={() => setIsMacroOpen(false)} />}
             {isCalibrating && (
-                <CalibrationWizard 
-                    landmarks={gesture?.landmarks || null} 
+                <CalibrationWizard
+                    landmarks={gesture?.landmarks || null}
                     onClose={() => setIsCalibrating(false)}
                     onComplete={() => {
                         setIsCalibrating(false);
-                        setError("BIOMETRICS_CALIBRATED: Neural Signature Authorized.");
-                        setTimeout(() => setError(null), 3000);
+                        setError("Calibration saved.");
                     }}
                 />
             )}
 
-            {/* TOP BAR: Tactical Status (Premium Centered) */}
-            <header className="sticky top-0 z-[60] flex h-20 w-full items-center border-b border-white/10 bg-black/80 shadow-[0_4px_30px_rgba(0,0,0,0.5)]">
-                <div className="mx-auto flex w-full max-w-[1600px] items-center justify-between px-10">
-                    <div className="flex items-center gap-10">
-                        <div className="flex items-center gap-4">
-                            <div className="relative">
-                                <div className="h-3 w-3 rounded-full bg-cyan-500 shadow-[0_0_15px_rgba(0,255,255,1)] animate-pulse" />
-                                <div className="absolute inset-0 h-3 w-3 rounded-full bg-cyan-400 animate-ping opacity-40" />
-                            </div>
-                            <div className="flex flex-col">
-                                <span className="text-[14px] font-black tracking-[0.4em] uppercase text-white/90">DexteraAI</span>
-                                <span className="text-[8px] font-mono text-cyan-500/60 tracking-[0.2em] uppercase">Industrial_Intelligence_Core</span>
-                            </div>
-                        </div>
-                        <div className="h-10 w-px bg-white/10" />
-                        <div className="flex flex-col border-l border-white/10 pl-10">
-                            <span className="hud-label !text-[7px]">Neural_Handshake</span>
-                            <button 
-                                onClick={() => isRunning ? setIsCalibrating(true) : setError("Boot Core First")}
-                                className={`text-[10px] font-mono tracking-widest uppercase transition-all ${biometricEngine.isCalibrated() ? "text-emerald-400/60 hover:text-emerald-400" : "text-cyan-400 hover:text-cyan-300 animate-pulse"}`}
-                            >
-                                {biometricEngine.isCalibrated() ? "[ RECALIBRATE ]" : "[ CALIBRATE_NOW ]"}
-                            </button>
-                        </div>
+            {/* ── Header ─────────────────────────────────── */}
+            <header className="sticky top-0 z-50 border-b border-[var(--rule)] bg-[var(--field)]/95 backdrop-blur-[2px]">
+                <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-4 px-6 py-3 lg:px-8">
+                    <div className="flex items-center gap-6">
+                        <Link href="/" className="display text-[15px] text-[var(--ink)] hover:opacity-70">
+                            Dextera
+                        </Link>
+                        <span className="label hidden sm:inline">Console</span>
+                        <StatusFlag live={isRunning} label={isRunning ? "Acquiring" : "Camera off"} />
                     </div>
 
-                    <div className="flex items-center gap-12">
+                    <div className="flex items-center gap-5 sm:gap-8">
                         <div className="flex flex-col items-end">
-                            <span className="hud-label !text-[7px]">Latency</span>
-                            <span className="text-xl font-extralight text-cyan-400 tracking-tighter">{latency}<span className="text-[10px] ml-1 opacity-40">MS</span></span>
+                            <span className="label">Frame</span>
+                            <span className="readout text-sm text-[var(--ink)]">
+                                {isRunning ? `${latency} ms` : "—"}
+                            </span>
                         </div>
-                        <div className="flex flex-col items-end border-l border-white/10 pl-12">
-                            <span className="hud-label !text-[7px]">Biometric_Auth</span>
-                            <div className="flex items-center gap-2">
-                                <span className={`text-[11px] font-bold tracking-widest ${isLocked ? "text-red-500" : "text-emerald-400"}`}>
-                                    {isLocked ? "ENCRYPTED" : "AUTHORIZED"}
-                                </span>
-                                <div className={`h-1.5 w-1.5 rounded-full ${isLocked ? "bg-red-500 shadow-[0_0_8px_rgba(255,0,0,0.8)]" : "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]"}`} />
-                            </div>
+                        <div className="flex flex-col items-end">
+                            <span className="label">Rate</span>
+                            <span className="readout text-sm text-[var(--ink)]">
+                                {isRunning ? `${fps} fps` : "—"}
+                            </span>
+                        </div>
+                        <div className="flex flex-col items-end border-l border-[var(--rule)] pl-5 sm:pl-8">
+                            <span className="label">Guard</span>
+                            <span
+                                className="readout text-sm"
+                                style={{ color: isLocked ? "var(--alert)" : "var(--signal)" }}
+                            >
+                                {isLocked ? "Locked" : "Open"}
+                            </span>
                         </div>
                     </div>
                 </div>
             </header>
 
-            {/* FIXED NEURAL ANCHOR (Always Centered for Biometric Precision) */}
-            <div className="relative mx-auto flex w-full max-w-[1600px] flex-1 flex-col p-10 gap-10">
-                
-                <div className="grid grid-cols-12 gap-10 items-start">
-                    {/* 1. CENTRAL VIEWING PORTAL (THE ANCHOR) */}
-                    <div 
-                        className="col-span-12 xl:col-span-8 relative aspect-video max-h-[70vh] rounded-[2.5rem] overflow-hidden border transition-all duration-500 bg-black/60 group tactical-border shadow-[0_20px_50px_rgba(0,0,0,0.8)] z-50"
-                        style={{
-                            borderColor: isActionActive ? "rgba(0, 255, 255, 0.8)" : "rgba(255, 255, 255, 0.1)",
-                            boxShadow: isActionActive ? "0 0 50px rgba(0, 255, 255, 0.2)" : "none"
-                        }}
-                    >
-                        {/* 1. THE SENSOR CHAMBER */}
-                        <div className="absolute inset-0">
+            <div className="mx-auto max-w-[1600px] px-6 py-6 lg:px-8">
+                <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,2.1fr)_minmax(320px,1fr)]">
+                    {/* ── Viewport ───────────────────────── */}
+                    <section className="panel overflow-hidden">
+                        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--rule)] px-4 py-2.5">
+                            <span className="label">Sensor</span>
+                            <div className="flex items-center gap-2">
+                                {MODEL_BUNDLES.map((bundle) => {
+                                    const active = bundleId === bundle.id;
+                                    return (
+                                        <button
+                                            key={bundle.id}
+                                            onClick={() => {
+                                                if (isRunning) {
+                                                    setError("Stop the camera before switching vocabulary.");
+                                                    return;
+                                                }
+                                                setBundleId(bundle.id);
+                                            }}
+                                            className="border px-3 py-1.5 label transition-colors"
+                                            style={{
+                                                borderRadius: 2,
+                                                borderColor: active ? "var(--signal)" : "var(--rule-strong)",
+                                                color: active ? "var(--signal)" : "var(--ink-3)",
+                                                background: active ? "var(--signal-4)" : "transparent",
+                                            }}
+                                        >
+                                            {bundle.name} · {bundle.classes}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+
+                        <div className="brackets relative aspect-video max-h-[62vh] bg-[var(--field)]">
                             <video
                                 ref={videoRef}
-                                className="h-full w-full object-contain bg-black/20"
-                                style={{ transform: "scaleX(-1)" }}
+                                className="absolute inset-0 h-full w-full object-cover"
+                                style={{
+                                    transform: "scaleX(-1)",
+                                    filter: "grayscale(1) brightness(0.4) contrast(1.15)",
+                                    opacity: isRunning ? 1 : 0,
+                                }}
                                 autoPlay
                                 playsInline
                                 muted
                             />
-                            <canvas 
-                                ref={canvasRef} 
-                                className="absolute inset-0 h-full w-full pointer-events-none z-[101]" 
-                                style={{ transform: "scaleX(-1)" }}
+                            <canvas
+                                ref={canvasRef}
+                                className="pointer-events-none absolute inset-0 h-full w-full"
                             />
-                        </div>
+                            {!isRunning && <div className="absolute inset-0 grid-field opacity-50" />}
 
-                        {/* 2. SECURITY HANDSHAKE (Un-mirrored Overlay with Neural Purity Clarity) */}
-                        {isRunning && isLocked && (
-                            <div className="absolute inset-0 z-[110] pointer-events-auto bg-black/30 transition-all duration-700">
-                                <BiometricGuard 
-                                    gesture={gesture} 
-                                    onUnlocked={() => setIsLocked(false)} 
-                                />
-                            </div>
-                        )}
+                            {/* Recognised label, over the feed */}
+                            {isRunning && (
+                                <div className="absolute left-4 top-4">
+                                    <span className="label">Recognised</span>
+                                    <p
+                                        className="display mt-1 text-3xl lg:text-4xl"
+                                        style={{ color: detected ? "var(--signal)" : "var(--ink-3)" }}
+                                    >
+                                        {detected ? gesture!.gestureName.replace(/_/g, " ") : "no hand"}
+                                    </p>
+                                    {detected && (
+                                        <p className="readout mt-1 text-xs text-[var(--ink-2)]">
+                                            {gesture!.confidence.toFixed(3)} · {gesture!.handedness}
+                                        </p>
+                                    )}
+                                </div>
+                            )}
 
-                        {/* HUD Overlays */}
-                        <div className="absolute top-10 left-10 p-8 glass-panel rounded-3xl border border-white/10 bg-black/40 shadow-2xl">
-                            <div className="flex items-center gap-3 mb-3">
-                                <div className="h-1.5 w-1.5 rounded-full bg-cyan-500 animate-pulse" />
-                                <span className="hud-label !text-[8px] !tracking-[0.5em] text-cyan-500/80">Neural_Sync_Active</span>
-                            </div>
-                            <h2 className="text-4xl font-extralight tracking-[-0.05em] uppercase text-white italic">
-                                {gesture && gesture.gestureId !== -1 ? gesture.gestureName.replace(/_/g, ' ') : "Awaiting Input"}
-                            </h2>
-                        </div>
-
-                        <div className="absolute bottom-10 right-10 flex gap-6 bg-black/40 p-5 rounded-2xl border border-white/10 shadow-2xl">
-                            <div className="flex flex-col">
-                                <span className="text-[7px] hud-label opacity-40 mb-1">POS_X</span>
-                                <span className="text-[10px] font-mono text-cyan-400/60">{gesture?.landmarks?.[0].x.toFixed(6) || "0.000000"}</span>
-                            </div>
-                            <div className="flex flex-col">
-                                <span className="text-[7px] hud-label opacity-40 mb-1">POS_Y</span>
-                                <span className="text-[10px] font-mono text-cyan-400/60">{gesture?.landmarks?.[0].y.toFixed(6) || "0.000000"}</span>
-                            </div>
-                        </div>
-
-                        {!isRunning && (
-                            <div className="absolute inset-0 flex items-center justify-center bg-black/95 z-50">
-                                <button
-                                    onClick={startCamera}
-                                    className="group relative flex flex-col items-center gap-10 transition-all hover:scale-105"
-                                >
-                                    <div className="relative h-24 w-24 border border-cyan-500/20 rounded-full flex items-center justify-center group-hover:border-cyan-500/60 transition-all">
-                                        <div className="h-2 w-2 bg-cyan-500 rounded-full shadow-[0_0_20px_rgba(0,255,255,1)]" />
-                                        <div className="absolute inset-0 border border-cyan-500/10 rounded-full animate-ping" />
+                            {/* Wrist coordinate, a real streaming value */}
+                            {isRunning && (
+                                <div className="absolute bottom-3 right-3 flex gap-4 border border-[var(--rule)] bg-[var(--field)]/80 px-3 py-2">
+                                    <div>
+                                        <span className="label">Wrist x</span>
+                                        <p className="readout text-[11px] text-[var(--signal-2)]">
+                                            {wrist ? wrist.x.toFixed(4) : "—"}
+                                        </p>
                                     </div>
-                                    <span className="text-[11px] font-black tracking-[0.8em] text-white/50 uppercase group-hover:text-cyan-400 transition-colors">Boot_Neural_Core</span>
-                                </button>
-
-                                {/* Vocabulary selector: each bundle ships its own labels.json */}
-                                <div className="absolute bottom-12 flex flex-col items-center gap-3">
-                                    <span className="text-[8px] font-mono tracking-[0.3em] text-white/30 uppercase">
-                                        Vocabulary
-                                    </span>
-                                    <div className="flex gap-2">
-                                        {MODEL_BUNDLES.map((bundle) => (
-                                            <button
-                                                key={bundle.id}
-                                                onClick={() => setBundleId(bundle.id)}
-                                                className={`rounded-full border px-4 py-1.5 text-[9px] font-bold uppercase tracking-[0.15em] transition-all ${
-                                                    bundleId === bundle.id
-                                                        ? "border-cyan-500/60 bg-cyan-500/10 text-cyan-300"
-                                                        : "border-white/10 text-white/40 hover:border-white/30 hover:text-white/70"
-                                                }`}
-                                            >
-                                                {bundle.name}
-                                            </button>
-                                        ))}
+                                    <div>
+                                        <span className="label">Wrist y</span>
+                                        <p className="readout text-[11px] text-[var(--signal-2)]">
+                                            {wrist ? wrist.y.toFixed(4) : "—"}
+                                        </p>
                                     </div>
                                 </div>
-                            </div>
-                        )}
+                            )}
 
-                        {isRunning && vocabulary.length > 0 && (
-                            <div className="absolute bottom-3 left-3 z-40 rounded-full border border-white/10 bg-black/60 px-3 py-1">
-                                <span className="text-[8px] font-mono uppercase tracking-[0.2em] text-white/40">
-                                    {MODEL_BUNDLES.find((b) => b.id === bundleId)?.name} · {vocabulary.length} classes
+                            {isRunning && isLocked && (
+                                <div className="absolute inset-0 z-20 bg-[var(--field)]/40">
+                                    <BiometricGuard gesture={gesture} onUnlocked={() => setIsLocked(false)} />
+                                </div>
+                            )}
+
+                            {!isRunning && (
+                                <div className="absolute inset-0 flex flex-col items-center justify-center gap-4">
+                                    <p className="label max-w-xs text-center leading-relaxed">
+                                        {activeBundle.name} · {activeBundle.classes} classes · runs on this device
+                                    </p>
+                                    <button onClick={startCamera} className="btn btn-signal">
+                                        Start camera
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Frame time trace */}
+                        <div className="border-t border-[var(--rule)] px-4 py-3">
+                            <div className="mb-2 flex items-center justify-between">
+                                <span className="label">Frame time, last {LATENCY_WINDOW}</span>
+                                <span className="label">ceiling 60 ms</span>
+                            </div>
+                            <Sparkline values={latencyHistory} max={60} height={28} />
+                        </div>
+                    </section>
+
+                    {/* ── Right rail ─────────────────────── */}
+                    <div className="flex flex-col gap-5">
+                        {/* Vocabulary */}
+                        <section className="panel">
+                            <div className="flex items-center justify-between border-b border-[var(--rule)] px-4 py-2.5">
+                                <span className="label">Vocabulary</span>
+                                <span className="label">
+                                    {vocabulary.length || activeBundle.classes} classes
                                 </span>
                             </div>
-                        )}
-                    </div>
-
-                    {/* 2. TACTICAL SIDEBAR (Optimized Density) */}
-                    <div className="col-span-12 xl:col-span-4 space-y-8">
-                        {/* Command Log */}
-                        <div className="spatial-card rounded-[2.5rem] p-8 flex flex-col min-h-[300px] max-h-[350px] bitstream-bg">
-                            <h4 className="hud-label mb-6 border-b border-white/10 pb-4 flex justify-between">
-                                <span>Command_Log</span>
-                                <span className="text-cyan-500/30">STREAM_ON</span>
-                            </h4>
-                            <div className="flex-1 overflow-y-auto space-y-5 pr-2 custom-scrollbar text-[10px] font-mono">
-                                <div className="text-cyan-500/40">[SYS] INFRA_READY_{memoryLog}</div>
-                                <div className="text-cyan-500/40">[SYS] NEURAL_CORE_INF_LATENCY_{latency || 12}MS</div>
-                                {recentActions.map((item, i) => (
-                                    <div key={`${item.timestamp}-${i}`} className="group flex flex-col gap-1 border-l border-cyan-500/50 pl-5 animate-in slide-in-from-right duration-500">
-                                        <div className="flex justify-between items-center">
-                                            <span className="font-bold text-white uppercase tracking-wider">{item.action.name}</span>
-                                            <span className="text-[7px] text-cyan-500/30 font-mono tracking-tighter">EXEC_OK</span>
-                                        </div>
-                                        <span className="text-[8px] opacity-30">[{new Date(item.timestamp).toLocaleTimeString([], { hour12: false, second: '2-digit' })}]</span>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-
-                        {/* Fusion Monitor (Multi-modal Sync) */}
-                        <div className="spatial-card rounded-[2.5rem] p-8 border-cyan-500/10 shadow-2xl">
-                            <FusionMonitor lastFusedAction={lastFusedAction} />
-                        </div>
-
-                        {/* Stability Index */}
-                        <div className="spatial-card rounded-[2.5rem] p-8">
-                            <h4 className="hud-label mb-5 !text-[7px] opacity-40 tracking-[0.3em]">Stability_Link</h4>
-                            <div className="flex items-center gap-6">
-                                <span className="text-5xl font-extralight tracking-tighter text-white">{(calibration.stability * 100).toFixed(0)}<span className="text-lg opacity-20 ml-1">%</span></span>
-                                <div className="flex-1 h-[2px] bg-white/5 rounded-full overflow-hidden">
-                                    <div className="h-full bg-cyan-500 shadow-[0_0_15px_rgba(0,255,255,0.6)] transition-all duration-1000" style={{ width: `${calibration.stability * 100}%` }} />
+                            <div className="max-h-[220px] overflow-y-auto p-3">
+                                <div className="flex flex-wrap gap-1.5">
+                                    {(vocabulary.length ? vocabulary : []).map((label) => {
+                                        const active = detected && gesture!.gestureName === label;
+                                        return (
+                                            <span
+                                                key={label}
+                                                className="mono border px-2 py-1 text-[10px] transition-colors"
+                                                style={{
+                                                    borderRadius: 2,
+                                                    borderColor: active ? "var(--signal)" : "var(--rule)",
+                                                    color: active ? "var(--signal)" : "var(--ink-3)",
+                                                    background: active ? "var(--signal-4)" : "transparent",
+                                                }}
+                                            >
+                                                {label}
+                                            </span>
+                                        );
+                                    })}
+                                    {!vocabulary.length && (
+                                        <span className="label">Loads with the model</span>
+                                    )}
                                 </div>
                             </div>
-                        </div>
+                        </section>
 
-                        {/* Control Cluster */}
-                        <div className="grid grid-cols-2 gap-4">
-                            <button onClick={() => isRunning ? setIsStudioOpen(true) : setError("System Locked")} className="spatial-card rounded-3xl py-6 hover:bg-cyan-500/10 transition-all group border-white/5">
-                                <span className="text-[9px] font-black uppercase tracking-[0.4em] text-white/30 group-hover:text-cyan-400">Studio</span>
-                            </button>
-                            <button onClick={() => isRunning ? setIsMapperOpen(true) : setError("System Locked")} className="spatial-card rounded-3xl py-6 hover:bg-cyan-500/10 transition-all group border-white/5">
-                                <span className="text-[9px] font-black uppercase tracking-[0.4em] text-white/30 group-hover:text-cyan-400">Mapper</span>
+                        {/* Tracking stability */}
+                        <section className="panel px-4 py-4">
+                            <div className="mb-3 flex items-baseline justify-between">
+                                <span className="label">Tracking stability</span>
+                                <span className="readout text-lg text-[var(--ink)]">
+                                    {(calibration.stability * 100).toFixed(0)}
+                                    <span className="ml-0.5 text-[10px] text-[var(--ink-3)]">%</span>
+                                </span>
+                            </div>
+                            <div className="meter">
+                                <div
+                                    className="meter-fill"
+                                    style={{ width: `${calibration.stability * 100}%` }}
+                                />
+                            </div>
+                            <div className="mt-4 grid grid-cols-2 gap-4">
+                                <div>
+                                    <span className="label">Lighting</span>
+                                    <p className="readout text-xs text-[var(--ink-2)]">
+                                        {(calibration.lighting * 100).toFixed(0)}%
+                                    </p>
+                                </div>
+                                <div>
+                                    <span className="label">Jitter</span>
+                                    <p className="readout text-xs text-[var(--ink-2)]">
+                                        {calibration.latencyJitter.toFixed(2)}
+                                    </p>
+                                </div>
+                            </div>
+                        </section>
+
+                        {/* Fusion */}
+                        <section className="panel px-4 py-4">
+                            <div className="mb-3 flex items-center justify-between">
+                                <span className="label">Gesture + voice</span>
+                                <StatusFlag live={isVoiceActive} label={isVoiceActive ? "Listening" : "Mic idle"} />
+                            </div>
+                            <FusionMonitor lastFusedAction={lastFusedAction} />
+                            {activeMacro && (
+                                <p className="readout mt-3 text-xs text-[var(--signal)]">
+                                    macro · {activeMacro}
+                                </p>
+                            )}
+                        </section>
+
+                        {/* Action log */}
+                        <section className="panel flex min-h-[150px] flex-col">
+                            <div className="flex items-center justify-between border-b border-[var(--rule)] px-4 py-2.5">
+                                <span className="label">Action log</span>
+                                <span className="label">{recentActions.length}</span>
+                            </div>
+                            <div className="flex-1 overflow-y-auto px-4 py-3">
+                                {recentActions.length === 0 ? (
+                                    <p className="label">
+                                        {isLocked ? "Unlock to dispatch actions" : "No actions yet"}
+                                    </p>
+                                ) : (
+                                    <ul className="space-y-2">
+                                        {recentActions.map((item, i) => (
+                                            <li
+                                                key={`${item.timestamp}-${i}`}
+                                                className="flex items-baseline justify-between border-l border-[var(--signal-2)] pl-3"
+                                            >
+                                                <span className="mono text-[11px] text-[var(--ink)]">
+                                                    {item.action.name}
+                                                </span>
+                                                <span className="readout text-[10px] text-[var(--ink-4)]">
+                                                    {new Date(item.timestamp).toLocaleTimeString([], {
+                                                        hour12: false,
+                                                    })}
+                                                </span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                )}
+                            </div>
+                        </section>
+
+                        {/* Modules */}
+                        <div className="grid grid-cols-2 gap-2">
+                            <button
+                                onClick={() => (isRunning ? setIsStudioOpen(true) : setError("Start the camera first."))}
+                                className="btn"
+                            >
+                                Studio
                             </button>
                             <button
-                                onClick={() => {
-                                    heatmapEnabledRef.current = !heatmapEnabledRef.current;
-                                    setHeatmapEnabledState(heatmapEnabledRef.current);
-                                }}
-                                className={`spatial-card rounded-3xl py-6 transition-all group ${heatmapEnabledState ? "border-cyan-500/50 bg-cyan-500/10 shadow-[0_0_20px_rgba(0,255,255,0.1)]" : "border-white/5 hover:bg-cyan-500/10"}`}
+                                onClick={() => (isRunning ? setIsMapperOpen(true) : setError("Start the camera first."))}
+                                className="btn"
                             >
-                                <span className={`text-[9px] font-black uppercase tracking-[0.4em] ${heatmapEnabledState ? "text-cyan-400" : "text-white/30 group-hover:text-cyan-400"}`}>Heatmap</span>
+                                Mapper
+                            </button>
+                            <button onClick={() => setIsMacroOpen(true)} className="btn">
+                                Macros
+                            </button>
+                            <button
+                                onClick={() =>
+                                    isRunning ? setIsCalibrating(true) : setError("Start the camera first.")
+                                }
+                                className="btn"
+                            >
+                                {biometricEngine.isCalibrated() ? "Recalibrate" : "Calibrate"}
                             </button>
                             <button
                                 onClick={() => { stopCamera(); setIsLocked(true); }}
-                                className="spatial-card rounded-3xl py-6 hover:bg-red-500/20 transition-all group border-red-500/10"
+                                className="btn col-span-2"
+                                style={{ borderColor: "var(--alert)", color: "var(--alert)" }}
                             >
-                                <span className="text-[9px] font-black uppercase tracking-[0.4em] text-white/20 group-hover:text-red-500">Secure</span>
+                                Stop &amp; lock
                             </button>
                         </div>
                     </div>
                 </div>
 
-                {/* 3. EXPANSIVE SPATIAL DECK */}
-                <div className="spatial-card rounded-[3rem] p-12 shadow-[0_30px_70px_rgba(0,0,0,0.9)] border-white/5">
+                {/* Spatial deck */}
+                <section className="panel mt-5 p-5">
                     <SpatialDeck />
-                </div>
+                </section>
             </div>
 
-            {/* Error Notifications */}
+            {/* Notices */}
             {error && (
-                <div className="z-[100] fixed top-20 right-8 glass-panel rounded-xl border-red-500/30 bg-black/80 px-6 py-3 backdrop-blur-3xl animate-in fade-in slide-in-from-right">
-                    <div className="flex items-center gap-3">
-                        <div className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse" />
-                        <span className="text-[10px] font-bold tracking-widest text-white/80 uppercase">{error}</span>
-                    </div>
+                <div
+                    className="fixed bottom-5 right-5 z-[100] border bg-[var(--field-1)] px-4 py-3"
+                    style={{ borderColor: "var(--alert)", borderRadius: 2 }}
+                >
+                    <span className="mono text-[11px] text-[var(--ink)]">{error}</span>
                 </div>
             )}
         </main>

@@ -31,5 +31,13 @@
   "feature_dim": 86,
   "val_accuracy": 0.9444,
   "test_accuracy": 0.9382,
-  "calibration": null
+  "calibration": {
+    "temperature": 0.8434,
+    "rejection_threshold": 0.4,
+    "ece_before": 0.0605,
+    "ece_after": 0.0265,
+    "accuracy": 0.9475,
+    "coverage_at_threshold": 0.9954,
+    "accuracy_at_threshold": 0.9503
+  }
 }

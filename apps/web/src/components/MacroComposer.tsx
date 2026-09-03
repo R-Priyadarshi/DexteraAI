@@ -1,139 +1,200 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
+import { actionRegistry } from "@/lib/action-registry";
 import { type GestureResult } from "@/lib/gesture-engine";
-import { macroEngine, type MacroPattern } from "@/lib/macro-engine";
+import { macroEngine } from "@/lib/macro-engine";
 
 interface MacroComposerProps {
     gesture: GestureResult | null;
     onClose: () => void;
 }
 
-const GESTURE_LABELS = [
-    "none", "open_palm", "closed_fist", "thumbs_up", "thumbs_down",
-    "peace", "pointing_up", "ok_sign", "pinch", "wave"
-];
+const MAX_STEPS = 4;
 
+/**
+ * Record a gesture sequence and bind it to an action.
+ *
+ * Steps are captured on segment onsets, so holding a pose contributes exactly
+ * one step. The previous version sampled raw frames and de-duplicated by hand,
+ * which meant a slow performer added the same gesture twice and a fast one
+ * dropped a step entirely.
+ */
 export function MacroComposer({ gesture, onClose }: MacroComposerProps) {
-    const [sequence, setSequence] = useState<number[]>([]);
-    const [macroName, setMacroName] = useState("");
-    const [status, setStatus] = useState<"idle" | "composing" | "saving">("idle");
-    const [lastLoggedId, setLastLoggedId] = useState<number | null>(null);
+    const [sequence, setSequence] = useState<string[]>([]);
+    const [name, setName] = useState("");
+    const [actionId, setActionId] = useState("");
+    const [recording, setRecording] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    const actions = actionRegistry.getAllActions();
 
     useEffect(() => {
-        if (status === "composing" && gesture && gesture.gestureId !== -1 && gesture.confidence > 0.95) {
-            if (gesture.gestureId !== lastLoggedId) {
-                setSequence(prev => [...prev, gesture.gestureId].slice(-4)); // Limit to 4 gestures
-                setLastLoggedId(gesture.gestureId);
-            }
-        }
-    }, [gesture, status, lastLoggedId]);
+        if (!recording || !gesture) return;
+        if (gesture.phase !== "onset" || gesture.rejected) return;
 
-    const saveMacro = () => {
+        setSequence((prev) => {
+            if (prev.length >= MAX_STEPS) return prev;
+            return [...prev, gesture.gestureName];
+        });
+    }, [gesture, recording]);
+
+    // Stop automatically once the sequence is full, so the last step isn't
+    // immediately overwritten by whatever the hand does next.
+    useEffect(() => {
+        if (sequence.length >= MAX_STEPS) setRecording(false);
+    }, [sequence.length]);
+
+    const save = () => {
         if (sequence.length < 2) {
-            alert("Macros require at least 2 gestures.");
+            setError("A macro needs at least two gestures.");
             return;
         }
-        if (!macroName.trim()) {
-            alert("Please enter a macro name.");
+        if (!name.trim()) {
+            setError("Give the macro a name.");
             return;
         }
-
-        setStatus("saving");
-        setTimeout(() => {
-            macroEngine.register({
-                id: `macro_${Date.now()}`,
-                name: macroName,
-                sequence: sequence,
-                description: "Custom spatial shortcut.",
-                execute: () => {
-                    console.log(`DexteraAI: Custom Macro [${macroName}] fired.`);
-                    alert(`Macro Executed: ${macroName}`);
-                }
-            });
-            onClose();
-        }, 800);
+        if (!actionId) {
+            setError("Choose the action this macro should run.");
+            return;
+        }
+        const created = macroEngine.defineMacro(name.trim(), sequence, actionId);
+        if (!created) {
+            setError("Could not create the macro.");
+            return;
+        }
+        onClose();
     };
 
     return (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/80 backdrop-blur-xl animate-in fade-in duration-500">
-            <div className="spatial-card relative w-full max-w-2xl rounded-[2.5rem] p-10 border-white/10">
-                <button
-                    onClick={onClose}
-                    className="absolute top-8 right-8 text-[#86868b] hover:text-white transition-colors"
-                >
-                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                </button>
-
-                <div className="flex flex-col items-center text-center">
-                    <div className="spatial-panel rounded-full px-4 py-1 mb-6">
-                        <span className="text-[10px] font-bold tracking-[0.3em] text-blue-500 uppercase italic">Automation Deck</span>
+        <div className="modal-backdrop fixed inset-0 z-[110] flex items-center justify-center p-6">
+            <div className="panel-raised flex max-h-[86vh] w-full max-w-2xl flex-col">
+                <header className="flex items-baseline justify-between border-b border-[var(--rule)] px-8 py-6">
+                    <div>
+                        <span className="label">Sequences</span>
+                        <h2 className="display mt-2 text-2xl text-[var(--ink)]">Macro composer</h2>
                     </div>
+                    <button onClick={onClose} className="label hover:text-[var(--ink)]">
+                        Close
+                    </button>
+                </header>
 
-                    <h2 className="text-3xl font-light tracking-tight text-white mb-4">Macro Composer</h2>
-                    <p className="text-sm text-[#86868b] mb-12 max-w-sm">
-                        Chain gestures together to create high-frequency system shortcuts.
+                <div className="min-h-0 flex-1 overflow-y-auto px-8 py-6">
+                    <p className="max-w-md text-xs leading-relaxed text-[var(--ink-2)]">
+                        Chain up to {MAX_STEPS} gestures into one command. A sequence is far
+                        harder to trigger by accident than a single pose, which is what makes
+                        it the right binding for anything you would not want fired by a
+                        stray hand.
                     </p>
 
-                    <div className="w-full space-y-10">
-                        {/* Sequence Visualizer */}
-                        <div className="flex items-center justify-center gap-4 min-h-[100px]">
+                    {/* Captured sequence */}
+                    <div className="mt-8">
+                        <div className="flex items-baseline justify-between border-b border-[var(--rule)] pb-3">
+                            <span className="label">Sequence</span>
+                            <span className="readout text-[10px] text-[var(--ink-3)]">
+                                {sequence.length} / {MAX_STEPS}
+                            </span>
+                        </div>
+
+                        <div className="flex min-h-[76px] flex-wrap items-center gap-3 py-5">
                             {sequence.length === 0 ? (
-                                <div className="text-[10px] font-mono tracking-widest text-white/10 uppercase">Awaiting_Initial_Gesture...</div>
+                                <span className="label">
+                                    {recording ? "Waiting for a gesture…" : "Nothing recorded"}
+                                </span>
                             ) : (
-                                sequence.map((id, i) => (
-                                    <div key={i} className="flex items-center gap-4 animate-in zoom-in duration-300">
-                                        <div className="flex flex-col items-center gap-2">
-                                            <div className="h-14 w-14 rounded-2xl border border-blue-500/20 bg-blue-500/5 flex items-center justify-center">
-                                                <span className="text-xs font-bold text-blue-500">{id}</span>
-                                            </div>
-                                            <span className="text-[9px] font-mono text-[#86868b] uppercase tracking-tighter">
-                                                {GESTURE_LABELS[id]}
+                                sequence.map((label, i) => (
+                                    <div key={i} className="flex items-center gap-3">
+                                        <div className="border border-[var(--signal-2)] bg-[var(--signal-4)] px-3 py-2">
+                                            <span className="mono text-[11px] text-[var(--signal)]">
+                                                {label.replace(/_/g, " ")}
                                             </span>
                                         </div>
                                         {i < sequence.length - 1 && (
-                                            <div className="w-4 h-px bg-white/10" />
+                                            <span className="text-[var(--ink-4)]">→</span>
                                         )}
                                     </div>
                                 ))
                             )}
                         </div>
 
-                        <div className="flex flex-col gap-4">
-                            <input
-                                type="text"
-                                placeholder="MACRO_ID_NAME"
-                                value={macroName}
-                                onChange={(e) => setMacroName(e.target.value)}
-                                className="w-full bg-white/[0.03] border border-white/10 rounded-2xl px-6 py-4 text-sm font-light tracking-widest text-white placeholder:text-white/10 focus:outline-none focus:border-blue-500/50 transition-all uppercase"
-                            />
+                        <div className="flex gap-3">
+                            <button
+                                onClick={() => {
+                                    setError(null);
+                                    setSequence([]);
+                                    setRecording(true);
+                                }}
+                                className={`btn ${recording ? "btn-signal" : ""}`}
+                            >
+                                {recording ? "Recording" : "Record sequence"}
+                            </button>
+                            {recording && (
+                                <button onClick={() => setRecording(false)} className="btn">
+                                    Stop
+                                </button>
+                            )}
+                        </div>
+                    </div>
 
-                            <div className="grid grid-cols-2 gap-4">
+                    {/* Name */}
+                    <div className="mt-10">
+                        <span className="label">Name</span>
+                        <input
+                            type="text"
+                            value={name}
+                            onChange={(e) => {
+                                setName(e.target.value);
+                                setError(null);
+                            }}
+                            placeholder="e.g. Mute everything"
+                            className="mono mt-3 w-full border border-[var(--rule-strong)] bg-[var(--field-1)] px-4 py-3 text-xs text-[var(--ink)] placeholder:text-[var(--ink-4)] focus:border-[var(--signal)] focus:outline-none"
+                        />
+                    </div>
+
+                    {/* Action */}
+                    <div className="mt-8">
+                        <span className="label">Runs</span>
+                        <div className="mt-3">
+                            {actions.map((a) => (
                                 <button
-                                    onClick={() => { setStatus("composing"); setSequence([]); setLastLoggedId(null); }}
-                                    className={`rounded-2xl border py-4 text-[10px] font-bold uppercase tracking-[0.2em] transition-all ${status === "composing" ? "border-blue-500/50 bg-blue-500/10 text-blue-500" : "border-white/5 bg-white/[0.02] text-white/40 hover:text-white"}`}
+                                    key={a.id}
+                                    onClick={() => {
+                                        setActionId(a.id);
+                                        setError(null);
+                                    }}
+                                    className="flex w-full items-baseline justify-between gap-4 border-b border-[var(--rule-2)] py-3 text-left"
                                 >
-                                    {status === "composing" ? "Recording..." : "New Sequence"}
+                                    <span
+                                        className="mono text-xs"
+                                        style={{
+                                            color:
+                                                actionId === a.id ? "var(--signal)" : "var(--ink)",
+                                        }}
+                                    >
+                                        {a.name}
+                                    </span>
+                                    <span className="label">{a.category}</span>
                                 </button>
-                                <button
-                                    onClick={saveMacro}
-                                    disabled={sequence.length < 2 || !macroName}
-                                    className="rounded-2xl bg-white py-4 text-[10px] font-bold uppercase tracking-[0.2em] text-black transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-20 disabled:scale-100"
-                                >
-                                    Save Macro
-                                </button>
-                            </div>
+                            ))}
                         </div>
                     </div>
                 </div>
 
-                <div className="mt-16 pt-8 border-t border-white/[0.03]">
-                    <p className="text-[10px] leading-relaxed text-[#86868b] uppercase tracking-wider text-center">
-                        Perform gestures in order while "Recording" is active. The engine will detect each unique pose and build your temporal shortcut.
-                    </p>
-                </div>
+                <footer className="flex items-center justify-between gap-4 border-t border-[var(--rule)] px-8 py-5">
+                    <span
+                        className="label"
+                        style={{ color: error ? "var(--alert)" : "var(--ink-3)" }}
+                    >
+                        {error ?? "Stored on this device only"}
+                    </span>
+                    <button
+                        onClick={save}
+                        disabled={sequence.length < 2 || !name.trim() || !actionId}
+                        className="btn btn-solid disabled:cursor-not-allowed disabled:opacity-25"
+                    >
+                        Save macro
+                    </button>
+                </footer>
             </div>
         </div>
     );
