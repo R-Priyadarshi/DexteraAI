@@ -47,6 +47,11 @@ dev = [
     # RuntimeError, which is not an ImportError, so `pytest.importorskip` does
     # not skip and collection aborts with exit code 2.
     "httpx>=0.27.0",
+    # Emits each test failure as a GitHub Actions annotation. Annotations are
+    # readable from the public API even where job logs are not, so a failure on
+    # a runner can be diagnosed without downloading the log — which is exactly
+    # the loop that made the last several CI failures slow to pin down.
+    "pytest-github-actions-annotate-failures>=0.2.0",
     "ruff>=0.4.0",
     "mypy>=1.10.0",
     # CI's lint job runs bandit. It used to be listed in the workflow but
