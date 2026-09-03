@@ -134,8 +134,12 @@ jobs:
       # Benchmarks are excluded here and run in their own job: they assert
       # timing budgets, and a shared runner under six parallel jobs is the
       # worst place to measure.
+      # Wrapped rather than calling pytest directly: a native abort kills pytest
+      # before it can report anything, so neither the annotate-failures plugin
+      # nor the log (which needs admin rights to download) tells you which test
+      # died. The wrapper republishes the crash tail as an annotation.
       - name: Tests
-        run: pytest tests/ -m "not slow and not gpu and not benchmark" --tb=short
+        run: bash scripts/run_tests_ci.sh tests/ -m "not slow and not gpu and not benchmark" --tb=short
 
   smoke:
     name: End-to-end wiring
