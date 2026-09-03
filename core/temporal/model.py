@@ -113,6 +113,12 @@ class GestureTransformer(nn.Module):
             encoder_layer,
             num_layers=num_layers,
             norm=nn.LayerNorm(d_model),
+            # The nested-tensor fast path cannot run with `norm_first=True`, and
+            # torch warns on every construction that it is silently disabling
+            # it. Saying so here makes the trade deliberate: pre-norm is what
+            # keeps this depth of encoder stable to train, and it is worth more
+            # than a fast path for a batch of one.
+            enable_nested_tensor=False,
         )
 
         # CLS token for sequence-level classification

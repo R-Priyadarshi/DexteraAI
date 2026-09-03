@@ -20,7 +20,6 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import ORJSONResponse
 from loguru import logger
 
 from backend.apps.api.middleware import RequestIDMiddleware, SecurityHeadersMiddleware
@@ -65,7 +64,6 @@ def create_app() -> FastAPI:
         docs_url="/docs",
         redoc_url="/redoc",
         openapi_url="/openapi.json",
-        default_response_class=ORJSONResponse,
         lifespan=lifespan,
     )
 

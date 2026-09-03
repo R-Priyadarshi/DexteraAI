@@ -14,9 +14,15 @@ export interface CalibrationMetrics {
     latencyJitter: number; // ms variance
 }
 
+/** Monotonic clock, falling back to Date.now outside the browser (tests). */
+function now(): number {
+    return typeof performance !== "undefined" ? performance.now() : Date.now();
+}
+
 export class Calibrator {
     private static instance: Calibrator;
     private history: Landmark[][] = [];
+    private frameTimes: number[] = [];
     private MAX_HISTORY = 50;
     
     private constructor() {}
@@ -29,6 +35,19 @@ export class Calibrator {
     }
 
     /**
+     * Discard everything recorded so far.
+     *
+     * Calibration describes one continuous session — a camera, a room, a
+     * person. Carrying it across a camera restart or a new session means
+     * reporting stability for a hand that is no longer there, and it is what
+     * made this singleton untestable.
+     */
+    public reset(): void {
+        this.history = [];
+        this.frameTimes = [];
+    }
+
+    /**
      * Record a frame for calibration.
      */
     public record(landmarks: Landmark[] | null) {
@@ -38,9 +57,13 @@ export class Calibrator {
         } else {
             this.history.push(landmarks);
         }
+        this.frameTimes.push(now());
 
         if (this.history.length > this.MAX_HISTORY) {
             this.history.shift();
+        }
+        if (this.frameTimes.length > this.MAX_HISTORY) {
+            this.frameTimes.shift();
         }
     }
 
@@ -59,11 +82,32 @@ export class Calibrator {
         // 2. Stability (Average variance of wrist/index landmarks)
         const stability = this.calculateStability();
 
-        return {
-            stability,
-            lighting,
-            latencyJitter: 0 // TODO: Track performance jitter
-        };
+        // 3. Latency jitter: how unevenly frames are arriving.
+        return { stability, lighting, latencyJitter: this.calculateJitter() };
+    }
+
+    /**
+     * Standard deviation of the interval between frames, in milliseconds.
+     *
+     * A steady 30fps loop gives intervals clustered around 33ms and a jitter
+     * near zero. Contention — a busy tab, thermal throttling, a detector
+     * occasionally taking two frames' worth of time — spreads them out, and
+     * that spread is what makes recognition feel unreliable even while the
+     * mean frame rate still looks fine. The mean alone hides it, which is why
+     * this reports the deviation rather than the average.
+     */
+    private calculateJitter(): number {
+        if (this.frameTimes.length < 3) return 0;
+
+        const intervals: number[] = [];
+        for (let i = 1; i < this.frameTimes.length; i++) {
+            intervals.push(this.frameTimes[i] - this.frameTimes[i - 1]);
+        }
+
+        const mean = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+        const variance =
+            intervals.reduce((acc, v) => acc + (v - mean) ** 2, 0) / intervals.length;
+        return Math.sqrt(variance);
     }
 
     private calculateStability(): number {
