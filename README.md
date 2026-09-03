@@ -143,16 +143,28 @@ Stated plainly, because the alternative is a promise the code does not keep:
   readings in some regions, including parts of Europe and the US. Recognising a
   gesture is not requiring it, and every binding is remappable at runtime, so
   this is a question of which defaults ship rather than a limit of the model.
-- **Linux is the only verified platform.** Everything here was developed and is
-  tested on Ubuntu, and CI runs on `ubuntu-latest` for Python 3.11 and 3.12. The
-  matrix previously also claimed macOS and Windows; those cells failed, and
-  rather than assert support that has never held, the claim was withdrawn. The
-  desktop bridge in particular cannot work on Windows as written — it relies on
-  POSIX file modes to keep its auth token owner-only, and `os.chmod` on Windows
-  toggles only a read-only flag — and it is already X11-only on Linux, so
-  Wayland sessions need `XDG_SESSION_TYPE=x11`. The web app itself is a static
-  site and runs in any modern browser on any OS; it is the Python toolchain and
-  the bridge whose portability is unproven.
+- **The test suite passes on Linux, macOS and Windows; that is not the same as
+  the product being verified there.** CI runs `ubuntu-latest` on Python 3.11 and
+  3.12, `macos-latest` and `windows-latest` on 3.12. What that proves is that
+  the toolchain installs and the suite passes — CI runners have no camera, so
+  the live capture path is exercised on Linux only, by hand.
+
+  Two platform constraints came out of getting those cells green, and both are
+  real rather than incidental:
+
+  - **macOS is held to MediaPipe 0.10.x** by an environment marker. 1.0 moved
+    the vision tasks onto a new C API which aborts the process on macOS arm64
+    the moment a detector runs — not at import or construction, so nothing can
+    catch it. 0.10.21 predates that API and ships a universal2 wheel, but has
+    no cp313 build, so **macOS needs Python 3.11 or 3.12**.
+  - **The desktop bridge's token file cannot be locked down on Windows.** It
+    keeps its auth token owner-only through POSIX file modes, and `os.chmod`
+    there toggles only a read-only flag. The bridge runs and its tests pass;
+    the permission guarantee does not hold, and it is skipped rather than
+    silently believed. On Linux the bridge is X11-only, so Wayland sessions
+    need `XDG_SESSION_TYPE=x11`.
+
+  The web app is a static site and runs in any modern browser on any OS.
 
 ---
 
