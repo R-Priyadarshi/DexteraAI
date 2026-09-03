@@ -101,5 +101,16 @@ jobs:
       - name: Type check
         run: npx tsc --noEmit
 
+      - name: Tests
+        run: npx vitest run
+
       - name: Build
         run: npm run build
+
+      # models/ is where training writes; public/onnx/ is what the browser
+      # fetches. They are separate copies, so a retrain or a recalibration
+      # updates one and silently leaves the other stale — the app keeps working
+      # while falling back to a generic confidence threshold.
+      - name: Served model bundles match models/
+        working-directory: ${{ github.workspace }}
+        run: scripts/sync_bundles.sh --check
