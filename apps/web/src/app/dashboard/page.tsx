@@ -14,6 +14,7 @@ import { bridgeClient } from "@/lib/bridge-client";
 import { MacroComposer } from "@/components/MacroComposer";
 import { macroEngine } from "@/lib/macro-engine";
 import { voiceEngine, type VoiceIntent } from "@/lib/voice-engine";
+import { faceEngine, type FacialMarker } from "@/lib/face-engine";
 import { intentRefinery, type FusedAction } from "@/lib/intent-refinery";
 import { hapticEngine } from "@/lib/haptic-engine";
 import { tacticalAudio } from "@/lib/tactical-audio";
@@ -142,9 +143,29 @@ export default function Console() {
     });
 
     const isLockedRef = useRef(isLocked);
+    // Off by default: a second landmarker is real per-frame cost, and the
+    // gesture path must not get slower for people who never turn this on.
+    const [faceEnabled, setFaceEnabled] = useState(false);
+    const [facialMarker, setFacialMarker] = useState<FacialMarker | null>(null);
+    const [faceReady, setFaceReady] = useState(false);
+    const facialMarkerRef = useRef<FacialMarker | null>(null);
+    const faceEnabledRef = useRef(faceEnabled);
+
     const voiceIntentRef = useRef(voiceIntent);
     useEffect(() => { isLockedRef.current = isLocked; }, [isLocked]);
     useEffect(() => { voiceIntentRef.current = voiceIntent; }, [voiceIntent]);
+    useEffect(() => { faceEnabledRef.current = faceEnabled; }, [faceEnabled]);
+
+    // Load on demand rather than at boot: most sessions never enable it, and
+    // the model is a few megabytes.
+    useEffect(() => {
+        if (!faceEnabled) return;
+        let cancelled = false;
+        faceEngine.init().then((ok) => {
+            if (!cancelled) setFaceReady(ok);
+        });
+        return () => { cancelled = true; };
+    }, [faceEnabled]);
 
     const startCamera = useCallback(async () => {
         // Held outside the try so the catch can release it. `engine.initialize`
@@ -215,6 +236,10 @@ export default function Console() {
         setIsRunning(false);
         setGesture(null);
         voiceEngine.stop();
+        faceEngine.close();
+        setFaceReady(false);
+        setFacialMarker(null);
+        facialMarkerRef.current = null;
         tacticalAudio.stopNeuralHum();
         hapticEngine.pulse("sonar_ping");
     }, []);
@@ -348,6 +373,23 @@ export default function Console() {
 
                         frameSubscriberRef.current?.(result);
 
+                        // Every third frame, ~10Hz. A brow raise lasts the
+                        // better part of a second, so the extra resolution
+                        // would buy nothing and this is a second model running
+                        // against the same frame budget as hand detection.
+                        if (
+                            faceEnabledRef.current &&
+                            faceEngine.isReady &&
+                            frameCountRef.current % 3 === 0
+                        ) {
+                            const reading = faceEngine.detect(video);
+                            const marker = reading?.marker ?? null;
+                            if (marker !== facialMarkerRef.current) {
+                                facialMarkerRef.current = marker;
+                                setFacialMarker(marker);
+                            }
+                        }
+
                         // Pointer runs every frame, not on the throttled state
                         // tick: a cursor updated ten times a second is unusable.
                         if (pointerModeRef.current) {
@@ -416,7 +458,11 @@ export default function Console() {
                             const macroMatch = macroEngine.process(result);
                             if (macroMatch) setActiveMacro(macroMatch.name);
 
-                            const fusedMatch = intentRefinery.process(result, voiceIntentRef.current);
+                            const fusedMatch = intentRefinery.process(
+                                result,
+                                voiceIntentRef.current,
+                                facialMarkerRef.current,
+                            );
                             if (fusedMatch) {
                                 // `process` already executed the action and
                                 // pulsed. Doing it again here fired every fused
@@ -870,9 +916,33 @@ export default function Console() {
                         {/* Fusion */}
                         <section className="panel px-4 py-4">
                             <div className="mb-3 flex items-center justify-between">
-                                <span className="label">Gesture + voice</span>
+                                <span className="label">Gesture + confirmation</span>
                                 <StatusFlag live={isVoiceActive} label={isVoiceActive ? "Listening" : "Mic idle"} />
                             </div>
+
+                            {/* Every fused action accepts either channel, so
+                                speech is never the only way to confirm one. */}
+                            <div className="mb-3 flex items-center justify-between gap-3 border border-[var(--rule)] px-3 py-2">
+                                <label className="label flex cursor-pointer items-center gap-2">
+                                    <input
+                                        type="checkbox"
+                                        checked={faceEnabled}
+                                        onChange={(e) => setFaceEnabled(e.target.checked)}
+                                        className="accent-[var(--signal)]"
+                                    />
+                                    Face marker
+                                </label>
+                                <span className="readout text-xs text-[var(--ink-3)]">
+                                    {!faceEnabled
+                                        ? "off"
+                                        : !faceReady
+                                          ? "loading…"
+                                          : facialMarker
+                                            ? facialMarker.replace("_", " ")
+                                            : "neutral"}
+                                </span>
+                            </div>
+
                             <FusionMonitor lastFusedAction={lastFusedAction} />
                             {activeMacro && (
                                 <p className="readout mt-3 text-xs text-[var(--signal)]">

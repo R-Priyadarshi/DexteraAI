@@ -13,6 +13,8 @@ cd "$(dirname "$0")/.."
 
 ORT_SRC="node_modules/onnxruntime-web/dist"
 MP_SRC="node_modules/@mediapipe/hands"
+TASKS_SRC="node_modules/@mediapipe/tasks-vision/wasm"
+FACE_MODEL="../../models/mediapipe/face_landmarker.task"
 DEST="public/onnx"
 
 if [ ! -d "$ORT_SRC" ]; then
@@ -31,6 +33,24 @@ if [ -d "$MP_SRC" ]; then
   cp -f "$MP_SRC"/* "$DEST/mediapipe"/ 2>/dev/null || true
 else
   echo "warning: $MP_SRC not found; skipping MediaPipe assets" >&2
+fi
+
+# The face landmarker runs the Tasks API, which loads its own WASM — a
+# different runtime from the legacy hands solution above, so both ship.
+if [ -d "$TASKS_SRC" ]; then
+  echo "Syncing MediaPipe Tasks WASM -> $DEST/tasks"
+  mkdir -p "$DEST/tasks"
+  cp -f "$TASKS_SRC"/* "$DEST/tasks"/ 2>/dev/null || true
+else
+  echo "warning: $TASKS_SRC not found; face markers will be unavailable" >&2
+fi
+
+# Fetched by `make fetch-models`, not shipped in npm or git.
+if [ -f "$FACE_MODEL" ]; then
+  echo "Syncing face_landmarker.task -> $DEST/mediapipe"
+  cp -f "$FACE_MODEL" "$DEST/mediapipe"/ 2>/dev/null || true
+else
+  echo "note: $FACE_MODEL missing — run 'make fetch-models' for face markers" >&2
 fi
 
 echo "Done. Runtime files in $DEST:"

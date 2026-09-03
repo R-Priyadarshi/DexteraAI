@@ -1,6 +1,7 @@
 "use client";
 
 import { type GestureResult } from "./gesture-engine";
+import { type FacialMarker } from "./face-engine";
 import { type VoiceIntent } from "./voice-engine";
 import { hapticEngine } from "./haptic-engine";
 import { actionRegistry } from "./action-registry";
@@ -10,13 +11,27 @@ export interface FusedAction {
     name: string;
     /** Gesture label, not class index — see `action-registry.ts`. */
     gestureName: string;
-    voiceIntent: VoiceIntent;
+    /**
+     * The confirming signal. At least one must be set; either one satisfies.
+     *
+     * Two routes to the same action rather than one, because the alternative is
+     * that anyone who cannot speak — non-verbal, in a shared room, on a call —
+     * loses every fused action on the product whose purpose is accessible
+     * input. A facial marker is the same confirmation by another channel.
+     */
+    voiceIntent?: VoiceIntent;
+    facialMarker?: FacialMarker;
     execute: () => void;
     feedbackType: "success" | "error" | "light";
 }
 
 interface TemporalIntent {
     intent: VoiceIntent;
+    timestamp: number;
+}
+
+interface TemporalMarker {
+    marker: FacialMarker;
     timestamp: number;
 }
 
@@ -44,10 +59,13 @@ export class IntentRefinery {
     
     // Temporal Buffers
     private voiceBuffer: TemporalIntent[] = [];
+    private faceBuffer: TemporalMarker[] = [];
     private gestureBuffer: TemporalGesture[] = [];
     
     /** Last intent the caller reported, so a held one is not re-buffered. */
     private lastVoiceSeen: VoiceIntent | null = null;
+    /** Same for the face: a held expression is one marker, not sixty. */
+    private lastFaceSeen: FacialMarker | null = null;
 
     private readonly FUSION_WINDOW_MS = 2000;
     private readonly COOLDOWN_MS = 1500;
@@ -70,6 +88,9 @@ export class IntentRefinery {
      * Each one runs a real registry action. A fusion whose only effect is a log
      * line is worse than no fusion at all, because it teaches the user the
      * interaction works when nothing is actually bound to it.
+     *
+     * Every default carries both a spoken and a facial confirmation, so none of
+     * them is reachable only by speaking.
      */
     private initializeDefaults() {
         const run = (actionId: string) => () => {
@@ -86,6 +107,9 @@ export class IntentRefinery {
             name: "Emergency halt",
             gestureName: "stop",
             voiceIntent: "abort",
+            // Furrowed brows: the wh-question marker in ASL, and the same face
+            // most people already make for "no, stop".
+            facialMarker: "brow_furrow",
             feedbackType: "error",
             execute: run("sys_lock"),
         });
@@ -95,6 +119,8 @@ export class IntentRefinery {
             name: "Confirm",
             gestureName: "ok",
             voiceIntent: "confirm",
+            // Raised brows: the yes/no question marker, and the assenting face.
+            facialMarker: "brow_raise",
             feedbackType: "success",
             execute: run("media_toggle"),
         });
@@ -104,6 +130,9 @@ export class IntentRefinery {
             name: "Reset tracking",
             gestureName: "palm",
             voiceIntent: "reset",
+            // Deliberately the least natural of the three, because resetting
+            // tracking should take an expression nobody wears by accident.
+            facialMarker: "mouth_open",
             feedbackType: "light",
             execute: run("sys_status_reset"),
         });
@@ -122,8 +151,10 @@ export class IntentRefinery {
      */
     public reset(): void {
         this.voiceBuffer = [];
+        this.faceBuffer = [];
         this.gestureBuffer = [];
         this.lastVoiceSeen = null;
+        this.lastFaceSeen = null;
         this.lastTriggerTime = 0;
         this.fusedActions = [];
         this.initializeDefaults();
@@ -132,7 +163,11 @@ export class IntentRefinery {
     /**
      * Probabilistically fuses gestures and voice intents within a temporal window.
      */
-    public process(gesture: GestureResult, voice: VoiceIntent | null): FusedAction | null {
+    public process(
+        gesture: GestureResult,
+        voice: VoiceIntent | null,
+        face: FacialMarker | null = null,
+    ): FusedAction | null {
         const now = Date.now();
 
         // 1. Cooldown Check
@@ -155,6 +190,13 @@ export class IntentRefinery {
             this.voiceBuffer.push({ intent: voice, timestamp: now });
         }
         this.lastVoiceSeen = voice;
+
+        // Edge-triggered for the same reason as voice: an expression is held
+        // across many frames, and each frame would otherwise be a fresh vote.
+        if (face && face !== this.lastFaceSeen) {
+            this.faceBuffer.push({ marker: face, timestamp: now });
+        }
+        this.lastFaceSeen = face;
         // Onsets only. Buffering every frame of a held pose would fill the
         // window with 60 copies of the same gesture and make the "consume both
         // triggers" step below meaningless.
@@ -164,16 +206,28 @@ export class IntentRefinery {
 
         // 3. Purge Stale Data
         this.voiceBuffer = this.voiceBuffer.filter(v => now - v.timestamp < this.FUSION_WINDOW_MS);
+        this.faceBuffer = this.faceBuffer.filter(f => now - f.timestamp < this.FUSION_WINDOW_MS);
         this.gestureBuffer = this.gestureBuffer.filter(g => now - g.timestamp < this.FUSION_WINDOW_MS);
 
-        if (this.voiceBuffer.length === 0 || this.gestureBuffer.length === 0) return null;
+        if (this.gestureBuffer.length === 0) return null;
+        if (this.voiceBuffer.length === 0 && this.faceBuffer.length === 0) return null;
 
         // 4. Fusion Matcher (Cross-Product search within windows)
         for (const action of this.fusedActions) {
-            const voiceMatch = this.voiceBuffer.find(v => v.intent === action.voiceIntent);
             const gestureMatch = this.gestureBuffer.find(g => g.gestureName === action.gestureName);
+            if (!gestureMatch) continue;
 
-            if (voiceMatch && gestureMatch) {
+            // Either channel confirms. Voice is checked first only because it
+            // is the more deliberate of the two, not because it counts more.
+            const voiceMatch = action.voiceIntent
+                ? this.voiceBuffer.find(v => v.intent === action.voiceIntent)
+                : undefined;
+            const faceMatch =
+                !voiceMatch && action.facialMarker
+                    ? this.faceBuffer.find(f => f.marker === action.facialMarker)
+                    : undefined;
+
+            if (voiceMatch || faceMatch) {
                 // No separation check here: the purge above already dropped
                 // anything older than FUSION_WINDOW_MS, so both survivors are
                 // within that of now and therefore within it of each other.
@@ -182,7 +236,8 @@ export class IntentRefinery {
                 // condition while enforcing nothing.
 
                 // Consume both triggers so neither can fire a second action.
-                this.voiceBuffer = this.voiceBuffer.filter(v => v !== voiceMatch);
+                if (voiceMatch) this.voiceBuffer = this.voiceBuffer.filter(v => v !== voiceMatch);
+                if (faceMatch) this.faceBuffer = this.faceBuffer.filter(f => f !== faceMatch);
                 this.gestureBuffer = this.gestureBuffer.filter(g => g !== gestureMatch);
 
                 this.lastTriggerTime = now;

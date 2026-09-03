@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { type GestureResult } from "../gesture-engine";
 import { intentRefinery } from "../intent-refinery";
+import { type FacialMarker } from "../face-engine";
 import { type VoiceIntent } from "../voice-engine";
 
 vi.mock("../haptic-engine", () => ({ hapticEngine: { pulse: vi.fn() } }));
@@ -16,13 +17,18 @@ function held(gestureName: string): GestureResult {
 }
 
 /** Register a fusion whose only job is to count how often it ran. */
-function countingFusion(gestureName: string, voiceIntent: VoiceIntent) {
+function countingFusion(
+    gestureName: string,
+    voiceIntent?: VoiceIntent,
+    facialMarker?: FacialMarker,
+) {
     const calls = { n: 0 };
     intentRefinery.register({
-        id: `test_${gestureName}_${voiceIntent}`,
+        id: `test_${gestureName}_${voiceIntent ?? ""}_${facialMarker ?? ""}`,
         name: "test",
         gestureName,
         voiceIntent,
+        facialMarker,
         feedbackType: "light",
         execute: () => {
             calls.n += 1;
@@ -143,6 +149,77 @@ describe("IntentRefinery", () => {
         const calls = countingFusion("palm", "confirm");
         const rejected = { gestureName: "palm", phase: "onset", rejected: true } as unknown as GestureResult;
         intentRefinery.process(rejected, "confirm");
+        expect(calls.n).toBe(0);
+    });
+});
+
+describe("IntentRefinery facial markers", () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+        intentRefinery.reset();
+    });
+
+    it("confirms with a facial marker when no voice is available", () => {
+        // The reason this modality exists: a user who cannot speak still needs
+        // both halves of a two-modality confirmation.
+        const calls = countingFusion("palm", "confirm", "brow_raise");
+        expect(intentRefinery.process(onset("palm"), null, "brow_raise")).not.toBeNull();
+        expect(calls.n).toBe(1);
+    });
+
+    it("does not fire on a facial marker alone", () => {
+        const calls = countingFusion("palm", "confirm", "brow_raise");
+        for (let i = 0; i < 5; i++) {
+            intentRefinery.process(onset("fist"), null, "brow_raise");
+            vi.advanceTimersByTime(33);
+        }
+        expect(calls.n).toBe(0);
+    });
+
+    it("requires the marker the action asks for", () => {
+        const calls = countingFusion("palm", "confirm", "brow_raise");
+        expect(intentRefinery.process(onset("palm"), null, "brow_furrow")).toBeNull();
+        expect(calls.n).toBe(0);
+    });
+
+    it("counts a held expression once, not once per frame", () => {
+        // The same regression the voice path had: an expression persists across
+        // frames, and every frame must not be a fresh vote.
+        const calls = countingFusion("palm", "confirm", "brow_raise");
+
+        intentRefinery.process(onset("palm"), null, "brow_raise");
+        expect(calls.n).toBe(1);
+
+        for (let i = 0; i < 60; i++) {
+            intentRefinery.process(held("palm"), null, "brow_raise");
+            vi.advanceTimersByTime(33);
+        }
+
+        const before = calls.n;
+        intentRefinery.process(onset("palm"), null, null);
+        expect(calls.n).toBe(before);
+    });
+
+    it("fires once when voice and face both confirm the same action", () => {
+        // Two confirmations are not two triggers.
+        const calls = countingFusion("palm", "confirm", "brow_raise");
+        intentRefinery.process(onset("palm"), "confirm", "brow_raise");
+        expect(calls.n).toBe(1);
+    });
+
+    it("still respects the window for a facial marker", () => {
+        const calls = countingFusion("palm", "confirm", "brow_raise");
+        intentRefinery.process(onset("fist"), null, "brow_raise");
+        vi.advanceTimersByTime(2100);
+        expect(intentRefinery.process(onset("palm"), null, null)).toBeNull();
+        expect(calls.n).toBe(0);
+    });
+
+    it("leaves voice-only actions unreachable by face", () => {
+        // An action that names no facial marker must not become firable by one.
+        const calls = countingFusion("palm", "confirm", undefined);
+        expect(intentRefinery.process(onset("palm"), null, "brow_raise")).toBeNull();
         expect(calls.n).toBe(0);
     });
 });

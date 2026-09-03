@@ -84,6 +84,37 @@ Three ways to act on a gesture:
   still for ~900ms clicks. This is the accessibility path: a vocabulary of
   discrete poses cannot reach an arbitrary target, only trigger a fixed binding.
 
+### Two modalities for anything irreversible
+
+Some actions should not fire on a gesture alone. `intent-refinery.ts` requires a
+gesture and a confirming signal within a 2-second window before dispatching one
+— an emergency halt that locks the screen, for instance. A hand that drifts into
+a pose cannot trigger it, and neither can a word overheard in conversation.
+
+The confirmation comes from either of two channels, and every shipped fusion
+accepts both:
+
+- **Voice** — `voice-engine.ts` scores spoken phrases against weighted keywords
+  for five intents. Web Speech API, so it needs a browser that has it.
+- **Facial marker** — `face-engine.ts` reads MediaPipe blendshape coefficients
+  and thresholds them into a raised brow, a furrowed brow, or an open mouth.
+
+Both channels exist because one of them excludes people. Speech is unavailable
+to anyone non-verbal, in a shared room, or on a call — and an accessibility
+product where the safety confirmation is speech-only has the gap in the wrong
+place. The markers are also the ones ASL already uses grammatically: raised
+brows for a yes/no question, lowered for a wh-question.
+
+No model is trained for this. Blendshapes come out of the face landmarker
+directly, so a marker is a threshold over named coefficients, the same
+geometric approach as the finger-curl ratios. Thresholds are set high
+deliberately: a false positive fires something the user did not ask for, while
+a false negative only asks them to repeat it.
+
+The face landmarker is off by default and loads on demand — it is a second
+model against the same frame budget as hand detection — and runs at ~10Hz
+rather than per frame, since a brow raise lasts most of a second.
+
 ### Known scope limits
 
 Stated plainly, because the alternative is a promise the code does not keep:
