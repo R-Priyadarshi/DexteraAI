@@ -116,6 +116,10 @@ class GesturePipeline:
         self._is_running = False
         self._privacy_mode = self._config.privacy_mode
         self._model_version = self._config.model_version
+        # Confidence calibration from the model bundle (temperature scaling +
+        # an open-set rejection threshold). Populated by _load_labels().
+        self._temperature: float = 1.0
+        self._rejection_threshold: float | None = None
 
     # ── Properties ────────────────────────────────────────────
 
@@ -252,6 +256,72 @@ class GesturePipeline:
                     cb.on_pipeline_error(self, e)
             raise
 
+    def process_image(self, frame: np.ndarray) -> FrameResult:
+        """Classify a single still image, independently of the streaming buffer.
+
+        `process_frame` accumulates a temporal window across calls, so a one-shot
+        request would never reach the sequence length needed to classify. Here the
+        detected pose is held across the whole window instead — the same shape the
+        model was trained on for static images (see `expand_static` in
+        GestureSequenceDataset) — so a single frame yields a real prediction.
+
+        Leaves the streaming buffers untouched, so it is safe to interleave with
+        `process_frame`.
+
+        Args:
+            frame: BGR image (H, W, 3), dtype uint8.
+
+        Returns:
+            FrameResult with detected hands and their gestures.
+        """
+        if not self._is_running:
+            raise RuntimeError("Pipeline not started. Call start() first.")
+
+        assert self._preprocessor is not None
+        assert self._detector is not None
+        assert self._normalizer is not None
+        assert self._feature_extractor is not None
+
+        t_start = time.perf_counter()
+        processed = self._preprocessor.process(frame)
+        hands = self._detector.detect(processed)
+        normalized_hands = self._normalizer.normalize_batch(hands)
+
+        gestures: list[GestureResult] = []
+        if self._model is not None:
+            for hand in normalized_hands[: self._config.max_hands]:
+                gesture = self._classify_static(hand)
+                if gesture:
+                    gestures.append(gesture)
+
+        result = FrameResult(
+            hands=[] if self._privacy_mode else normalized_hands,
+            gestures=gestures,
+            timestamp_ms=time.time() * 1000.0,
+            inference_time_ms=(time.perf_counter() - t_start) * 1000.0,
+        )
+
+        for cb in self._callbacks:
+            if hasattr(cb, "on_frame"):
+                cb.on_frame(self, result)
+
+        return result
+
+    def _classify_static(self, hand: HandLandmarks) -> GestureResult | None:
+        """Classify one hand by holding its pose across the full temporal window."""
+        assert self._feature_extractor is not None
+        import numpy as _np
+
+        features_1d = self._feature_extractor.extract(hand)
+        features = _np.repeat(
+            features_1d[None, :], self._config.sequence_length, axis=0
+        ).astype(_np.float32)
+        mask = _np.zeros(self._config.sequence_length, dtype=bool)
+
+        x = torch.from_numpy(features).unsqueeze(0).to(self._device)
+        m = torch.from_numpy(mask).unsqueeze(0).to(self._device)
+        return self._predict_from_window(x, m, hand)
+
     def _classify_gesture(self, hand_idx: int, hand: HandLandmarks) -> GestureResult | None:
         """Run gesture classification on the buffered sequence for one hand."""
         assert self._model is not None
@@ -260,13 +330,36 @@ class GesturePipeline:
         x = torch.from_numpy(features).unsqueeze(0).to(self._device)  # (1, S, F)
         m = torch.from_numpy(mask).unsqueeze(0).to(self._device)  # (1, S)
 
-        result = self._model.predict(x, mask=m)
+        return self._predict_from_window(x, m, hand)
 
-        class_id = int(result["class_id"].item())
-        probs = result["class_probs"][0]
+    def _predict_from_window(
+        self, x: torch.Tensor, m: torch.Tensor, hand: HandLandmarks
+    ) -> GestureResult | None:
+        """Run the model on a prepared (1, S, F) window and apply calibration."""
+        assert self._model is not None
+        if self._temperature != 1.0:
+            # Temperature scaling: recompute probabilities from calibrated logits
+            # so the reported confidence means what it says.
+            self._model.eval()
+            with torch.no_grad():
+                logits = self._model(x, mask=m)["logits"] / self._temperature
+                probs = torch.softmax(logits, dim=-1)[0]
+            class_id = int(torch.argmax(probs).item())
+        else:
+            result = self._model.predict(x, mask=m)
+            class_id = int(result["class_id"].item())
+            probs = result["class_probs"][0]
+
         class_prob = float(probs[class_id].item())
 
-        if class_prob < self._config.confidence_threshold:
+        # A calibrated rejection threshold, when the bundle ships one, is what
+        # keeps out-of-vocabulary hand shapes from being reported confidently.
+        threshold = (
+            self._rejection_threshold
+            if self._rejection_threshold is not None
+            else self._config.confidence_threshold
+        )
+        if class_prob < threshold:
             return None
 
         gesture_name = (
@@ -358,6 +451,17 @@ class GesturePipeline:
                 if isinstance(data, dict) and data.get("version"):
                     self._model_version = str(data["version"])
                 logger.info(f"Loaded {len(self._labels)} labels from {labels_path.name}")
+
+            calibration = data.get("calibration") if isinstance(data, dict) else None
+            if isinstance(calibration, dict):
+                self._temperature = float(calibration.get("temperature", 1.0)) or 1.0
+                rejection = calibration.get("rejection_threshold")
+                if rejection is not None:
+                    self._rejection_threshold = float(rejection)
+                logger.info(
+                    f"Calibration: temperature={self._temperature:.3f} "
+                    f"rejection_threshold={self._rejection_threshold}"
+                )
         except Exception as e:
             logger.warning(f"Failed to read {labels_path}: {e}. Using configured labels.")
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import cv2
@@ -38,10 +39,27 @@ _pipeline: GesturePipeline | None = None
 
 
 def _get_pipeline() -> GesturePipeline:
-    """Get or create the global gesture pipeline."""
+    """Get or create the global gesture pipeline.
+
+    Loads the trained checkpoint named in settings when it exists; otherwise
+    the pipeline starts in detection-only mode (hands, but no classification)
+    rather than failing to boot.
+    """
     global _pipeline
     if _pipeline is None:
-        _pipeline = GesturePipeline(PipelineConfig())
+        settings = get_settings()
+        checkpoint = Path(settings.pytorch_model_path)
+        if not checkpoint.exists():
+            logger.warning(
+                f"No model at {checkpoint} — starting in detection-only mode. "
+                "Train one with: python dextera.py train --dataset data/sequences/hagrid"
+            )
+        _pipeline = GesturePipeline(
+            PipelineConfig(
+                model_path=str(checkpoint) if checkpoint.exists() else None,
+                confidence_threshold=settings.confidence_threshold,
+            )
+        )
         _pipeline.start()
     return _pipeline
 
@@ -91,7 +109,10 @@ async def predict(
 
     try:
         pipeline = _get_pipeline()
-        result = pipeline.process_frame(bgr_image)
+        # One-shot request: hold the pose across the temporal window rather than
+        # accumulating across calls, which a single POST could never fill.
+        # The streaming endpoint below still uses process_frame().
+        result = pipeline.process_image(bgr_image)
     except Exception as e:
         logger.error("Prediction failed: {}", e)
         raise HTTPException(

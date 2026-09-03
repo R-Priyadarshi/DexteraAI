@@ -148,3 +148,33 @@ class TestPipelineInference:
         with GesturePipeline(PipelineConfig(max_hands=1, callbacks=[cb])) as pipeline:
             pipeline.process_frame(_blank_frame())
         assert cb.frames == 1
+
+
+@requires_mediapipe_bundle
+class TestOneShotImage:
+    """process_image() classifies a single still, without the streaming buffer.
+
+    A one-shot POST can never fill the 30-frame window that process_frame()
+    accumulates, so /api/predict would always return zero predictions if it
+    used the streaming path.
+    """
+
+    def test_process_image_requires_start(self) -> None:
+        pipeline = GesturePipeline(PipelineConfig())
+        with pytest.raises(RuntimeError, match="not started"):
+            pipeline.process_image(_blank_frame())
+
+    def test_process_image_returns_frame_result(self) -> None:
+        with GesturePipeline(PipelineConfig(max_hands=1)) as pipeline:
+            result = pipeline.process_image(_blank_frame())
+        assert isinstance(result, FrameResult)
+        assert result.gestures == []  # blank frame, no hands
+        assert result.inference_time_ms >= 0.0
+
+    def test_process_image_does_not_disturb_streaming_buffers(self) -> None:
+        """Interleaving one-shot calls must not corrupt the streaming window."""
+        with GesturePipeline(PipelineConfig(max_hands=1)) as pipeline:
+            pipeline.process_frame(_blank_frame())
+            before = pipeline._buffers[0].length
+            pipeline.process_image(_blank_frame())
+            assert pipeline._buffers[0].length == before

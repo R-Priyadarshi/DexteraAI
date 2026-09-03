@@ -35,8 +35,11 @@ class Settings(BaseSettings):
     cors_origins: list[str] = ["*"]
 
     # ── Model paths ──────────────────────────────────────────
-    onnx_model_path: str = "models/gesture_classifier.onnx"
-    pytorch_model_path: str = "models/gesture_classifier.pt"
+    # Default to the trained HaGRID bundle (18 gestures). The pipeline reads
+    # labels.json from the same directory, so the vocabulary travels with the
+    # weights instead of being hardcoded here.
+    onnx_model_path: str = "models/hagrid/gesture.onnx"
+    pytorch_model_path: str = "checkpoints/hagrid/best.pt"
     dataset_path: str = "data/processed/dataset.joblib"
     training_data_dir: str = "data/raw"
 
