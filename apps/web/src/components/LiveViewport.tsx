@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { GestureEngine, type GestureResult } from "@/lib/gesture-engine";
 import { FALLBACK_CONNECTIONS } from "./HandPlate";
+import { asset } from "@/lib/base-path";
 
 export type ViewportStatus =
   | "idle"
@@ -39,7 +40,7 @@ const LATENCY_WINDOW = 60;
  * model sees is what gets drawn.
  */
 export function LiveViewport({
-  modelUrl = "/onnx/hagrid/gesture.onnx",
+  modelUrl = asset("/onnx/hagrid/gesture.onnx"),
   onTelemetry,
   onStatusChange,
   mirror = true,

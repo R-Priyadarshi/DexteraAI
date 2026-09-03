@@ -14,6 +14,7 @@ import { type GesturePhase, type SegmenterConfig } from "./gesture-segmenter";
 import { normalizeLandmarks } from "./landmark-normalizer";
 import { buildPrototype, matchPrototypes, type Prototype } from "./few-shot";
 import { HandTrack, type Handedness, type HandResult } from "./hand-track";
+import { asset } from "./base-path";
 
 export type { HandResult, Handedness } from "./hand-track";
 
@@ -513,7 +514,7 @@ export class GestureEngine {
     // 1. Initialize ONNX Runtime with WebGPU if available
     try {
       // Configure ORT with detailed paths for better reliability in workers
-      ort.env.wasm.wasmPaths = "/onnx/";
+      ort.env.wasm.wasmPaths = asset("/onnx/");
 
       // Threaded WASM needs SharedArrayBuffer, which needs the page to be
       // cross-origin isolated (COOP + COEP). Those headers are set in
@@ -600,7 +601,7 @@ export class GestureEngine {
     }
 
     this.hands = new Hands({
-      locateFile: (file: string) => `/onnx/mediapipe/${file}`,
+      locateFile: (file: string) => asset(`/onnx/mediapipe/${file}`),
     });
 
     this.hands.setOptions({

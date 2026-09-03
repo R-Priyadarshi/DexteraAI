@@ -29,6 +29,7 @@ import { PointerOverlay } from "@/components/PointerOverlay";
 import { CalibrationWizard } from "@/components/CalibrationWizard";
 import { biometricEngine } from "@/lib/biometric-engine";
 import { Sparkline, StatusFlag } from "@/components/Telemetry";
+import { asset } from "@/lib/base-path";
 
 /**
  * Trained model bundles. Each directory holds gesture.onnx + labels.json, so the
@@ -36,8 +37,8 @@ import { Sparkline, StatusFlag } from "@/components/Telemetry";
  * Produced by: python dextera.py train --export models/<name>
  */
 const MODEL_BUNDLES = [
-    { id: "hagrid", name: "General gestures", url: "/onnx/hagrid/gesture.onnx", classes: 18 },
-    { id: "asl_alphabet", name: "ASL fingerspelling", url: "/onnx/asl_alphabet/gesture.onnx", classes: 26 },
+    { id: "hagrid", name: "General gestures", url: asset("/onnx/hagrid/gesture.onnx"), classes: 18 },
+    { id: "asl_alphabet", name: "ASL fingerspelling", url: asset("/onnx/asl_alphabet/gesture.onnx"), classes: 26 },
 ] as const;
 
 type BundleId = (typeof MODEL_BUNDLES)[number]["id"];

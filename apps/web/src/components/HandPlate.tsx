@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { asset } from "@/lib/base-path";
 
 export interface Point3 {
   0: number;
@@ -162,7 +163,7 @@ export function useGestureAtlas() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/data/gesture-atlas.json")
+    fetch(asset("/data/gesture-atlas.json"))
       .then((r) => {
         if (!r.ok) throw new Error(String(r.status));
         return r.json();

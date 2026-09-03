@@ -3,6 +3,7 @@ import { Archivo, JetBrains_Mono } from "next/font/google";
 import Script from "next/script";
 import "./globals.css";
 import { ServiceWorker } from "@/components/ServiceWorker";
+import { asset } from "@/lib/base-path";
 
 // Archivo: an industrial grotesk with real character at large sizes — it holds
 // tight tracking without the anonymity of a default UI sans.
@@ -62,7 +63,7 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <body suppressHydrationWarning>
-        <Script src="/onnx/mediapipe/hands.js" strategy="beforeInteractive" />
+        <Script src={asset("/onnx/mediapipe/hands.js")} strategy="beforeInteractive" />
         <ServiceWorker />
         {children}
       </body>

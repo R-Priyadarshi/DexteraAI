@@ -1,0 +1,101 @@
+name: Deploy
+
+# Publishes the web app to GitHub Pages. The app is a static export that runs
+# entirely in the browser, so there is no server to deploy — the whole product
+# is the artifact this uploads.
+#
+# Pages cannot set COOP/COEP headers, so the site runs ONNX Runtime Web
+# single-threaded. That is a supported configuration, just slower; a host that
+# can send those headers (Cloudflare Pages, Netlify — both read the existing
+# `apps/web/public/_headers`) gets the threaded backend. See
+# docs/DEPLOYMENT-HEADERS.md.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never cancel a deployment midway: unlike CI, the thing being interrupted is
+# a live site rather than a report.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  FACE_LANDMARKER_URL: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
+
+jobs:
+  deploy:
+    name: Publish to GitHub Pages
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Configure Pages
+        id: pages
+        uses: actions/configure-pages@v5
+        with:
+          # Turn Pages on if it is not already, so a fresh clone of this repo
+          # deploys without anyone visiting the settings UI first.
+          enablement: true
+
+      # Fetched rather than shipped: it is a 3.5MB Google-hosted bundle that
+      # belongs in neither npm nor git. sync-runtime.sh warns and continues
+      # without it, which would silently ship the site with no face markers.
+      - name: Fetch MediaPipe face bundle
+        run: |
+          mkdir -p models/mediapipe
+          curl -sSL --retry 3 -o models/mediapipe/face_landmarker.task "$FACE_LANDMARKER_URL"
+
+      # postinstall runs sync-runtime.sh, which copies the tracked model
+      # bundles out of models/ and the WASM runtimes out of node_modules into
+      # public/. The export only packages what is sitting there at build time.
+      - name: Install
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Build
+        working-directory: apps/web
+        env:
+          NEXT_PUBLIC_BASE_PATH: ${{ steps.pages.outputs.base_path }}
+        run: npm run build
+
+      # A project site is served from /<repo>/, and the engine fetches its
+      # models by URL at runtime where the bundler cannot rewrite them. If the
+      # base path fails to reach those URLs the deploy still succeeds and the
+      # site loads — the camera just runs with no model behind it, which reads
+      # as a broken product rather than a broken deploy. Cheaper to catch here.
+      - name: Verify assets carry the base path
+        working-directory: apps/web
+        run: |
+          set -euo pipefail
+          base="${{ steps.pages.outputs.base_path }}"
+          test -f out/onnx/hagrid/gesture.onnx || {
+            echo "::error::model bundle missing from the export; sync-runtime.sh did not run"; exit 1; }
+          if [ -n "$base" ] && [ "$base" != "/" ]; then
+            grep -q "${base}/onnx/mediapipe/hands.js" out/dashboard.html || {
+              echo "::error::base path '$base' did not reach the runtime asset URLs"; exit 1; }
+          fi
+          echo "Export looks right for base path '${base:-/}'"
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: apps/web/out
+
+      - name: Deploy
+        id: deploy
+        uses: actions/deploy-pages@v4

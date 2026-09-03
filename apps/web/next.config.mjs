@@ -1,6 +1,13 @@
+// Where the site is served from. Empty for a domain root; "/DexteraAI" for a
+// GitHub Pages project site. Next applies this to its own bundles and routes;
+// `src/lib/base-path.ts` applies the same value to the model and WASM URLs the
+// engine fetches at runtime, which the bundler never sees.
+const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "export",
+  basePath,
   // Turbopack is the default bundler as of Next 16, and it resolves browser
   // conditions itself rather than polyfilling Node built-ins, so the
   // `resolve.fallback` shim that used to sit here for onnxruntime-web's `fs`

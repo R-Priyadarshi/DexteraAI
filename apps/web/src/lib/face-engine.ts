@@ -41,6 +41,8 @@ export interface FaceReading {
  * something the user did not ask for, while a false negative just asks them to
  * do it again.
  */
+import { asset } from "./base-path";
+
 const MARKERS: Record<FacialMarker, { shapes: string[]; threshold: number }> = {
     // Yes/no question, and the natural "yes, do it" face.
     brow_raise: { shapes: ["browInnerUp", "browOuterUpLeft", "browOuterUpRight"], threshold: 0.45 },
@@ -51,8 +53,8 @@ const MARKERS: Record<FacialMarker, { shapes: string[]; threshold: number }> = {
 };
 
 /** Where `sync-runtime.sh` puts the Tasks WASM and the face model. */
-const WASM_PATH = "/onnx/tasks";
-const MODEL_PATH = "/onnx/mediapipe/face_landmarker.task";
+const WASM_PATH = asset("/onnx/tasks");
+const MODEL_PATH = asset("/onnx/mediapipe/face_landmarker.task");
 
 export class FaceEngine {
     private static instance: FaceEngine;
