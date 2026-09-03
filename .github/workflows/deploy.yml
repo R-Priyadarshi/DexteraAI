@@ -45,13 +45,20 @@ jobs:
           cache: "npm"
           cache-dependency-path: apps/web/package-lock.json
 
+      # Needs Pages switched on once by hand, under
+      # Settings -> Pages -> Build and deployment -> Source: GitHub Actions.
+      # `enablement: true` was tried and cannot work: GITHUB_TOKEN is refused
+      # the Pages-creation API ("Resource not accessible by integration"), so
+      # the first deploy of a fork will fail here until someone flips it.
       - name: Configure Pages
         id: pages
         uses: actions/configure-pages@v5
-        with:
-          # Turn Pages on if it is not already, so a fresh clone of this repo
-          # deploys without anyone visiting the settings UI first.
-          enablement: true
+
+      - name: Explain a Pages misconfiguration
+        if: failure() && steps.pages.outcome == 'failure'
+        run: |
+          echo "::error::GitHub Pages is not enabled for this repository. Enable it under Settings -> Pages -> Build and deployment -> Source: 'GitHub Actions', then re-run this workflow. It cannot be enabled from here: GITHUB_TOKEN is not granted the Pages-creation API."
+          exit 1
 
       # Fetched rather than shipped: it is a 3.5MB Google-hosted bundle that
       # belongs in neither npm nor git. sync-runtime.sh warns and continues

@@ -30,6 +30,9 @@ import { CalibrationWizard } from "@/components/CalibrationWizard";
 import { biometricEngine } from "@/lib/biometric-engine";
 import { Sparkline, StatusFlag } from "@/components/Telemetry";
 import { asset } from "@/lib/base-path";
+import { AirCanvas } from "@/lib/air-canvas";
+import { DollarRecognizer } from "@/lib/dollar-recognizer";
+import { BUILT_IN_SHAPES, BUILT_IN_SHAPE_NAMES } from "@/lib/air-shapes";
 
 /**
  * Trained model bundles. Each directory holds gesture.onnx + labels.json, so the
@@ -146,6 +149,12 @@ export default function Console() {
     const isLockedRef = useRef(isLocked);
     // Off by default: a second landmarker is real per-frame cost, and the
     // gesture path must not get slower for people who never turn this on.
+    const [airDraw, setAirDraw] = useState(false);
+    const [airShape, setAirShape] = useState<{ name: string; score: number } | null>(null);
+    const airDrawRef = useRef(airDraw);
+    const airCanvasRef = useRef<AirCanvas | null>(null);
+    const airRecognizerRef = useRef<DollarRecognizer | null>(null);
+
     const [faceEnabled, setFaceEnabled] = useState(false);
     const [facialMarker, setFacialMarker] = useState<FacialMarker | null>(null);
     const [faceReady, setFaceReady] = useState(false);
@@ -156,6 +165,12 @@ export default function Console() {
     useEffect(() => { isLockedRef.current = isLocked; }, [isLocked]);
     useEffect(() => { voiceIntentRef.current = voiceIntent; }, [voiceIntent]);
     useEffect(() => { faceEnabledRef.current = faceEnabled; }, [faceEnabled]);
+    useEffect(() => {
+        airDrawRef.current = airDraw;
+        // Drop a half-finished stroke when the mode is switched off, so
+        // re-enabling does not resume someone else's shape.
+        if (!airDraw) airCanvasRef.current?.reset();
+    }, [airDraw]);
 
     // Load on demand rather than at boot: most sessions never enable it, and
     // the model is a few megabytes.
@@ -249,6 +264,36 @@ export default function Console() {
     const lastFpsTimeRef = useRef(0);
     const lastStateUpdateTimeRef = useRef(0);
     const loopRef = useRef<number | null>(null);
+
+    /**
+     * Paint the stroke in progress onto the same canvas as the skeleton.
+     *
+     * The canvas is flipped with CSS `scaleX(-1)` to match the mirrored video,
+     * and `AirCanvas` already stores its points mirrored so the shape matches
+     * what the person drew. Drawing them straight would flip them twice, so x
+     * is un-mirrored here — the one place in the app where the two corrections
+     * meet.
+     */
+    const drawAirTrail = useCallback((canvas: HTMLCanvasElement, trail: readonly { x: number; y: number }[]) => {
+        if (trail.length < 2) return;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+
+        ctx.save();
+        ctx.strokeStyle = "rgb(96, 165, 250)";
+        ctx.lineWidth = Math.max(2, canvas.width * 0.006);
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.beginPath();
+        trail.forEach((point, i) => {
+            const x = (1 - point.x) * canvas.width;
+            const y = point.y * canvas.height;
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+        ctx.restore();
+    }, []);
 
     const drawLandmarks = useCallback((
         canvas: HTMLCanvasElement,
@@ -391,6 +436,33 @@ export default function Console() {
                             }
                         }
 
+                        // Air drawing. Runs every frame rather than on the
+                        // throttled tick: a stroke sampled at 10Hz is a
+                        // polygon, and the corners it invents are exactly what
+                        // the recogniser would read as a different shape.
+                        if (airDrawRef.current) {
+                            const air = (airCanvasRef.current ??= new AirCanvas());
+                            const recognizer = (airRecognizerRef.current ??= (() => {
+                                const r = new DollarRecognizer();
+                                for (const [name, pts] of Object.entries(BUILT_IN_SHAPES)) {
+                                    r.learn(name, pts);
+                                }
+                                return r;
+                            })());
+
+                            const event = air.feed(result.landmarks);
+                            if (event?.type === "end") {
+                                const match = recognizer.recognize(event.points);
+                                // Below this the best match is closer to noise
+                                // than to any template; reporting it anyway
+                                // would fire actions on stray hand movement.
+                                setAirShape(match && match.score >= 0.72 ? match : null);
+                            } else if (event?.type === "start") {
+                                setAirShape(null);
+                            }
+                            drawAirTrail(canvas, air.trail);
+                        }
+
                         // Pointer runs every frame, not on the throttled state
                         // tick: a cursor updated ten times a second is unusable.
                         if (pointerModeRef.current) {
@@ -508,7 +580,7 @@ export default function Console() {
         return () => {
             if (loopRef.current) cancelAnimationFrame(loopRef.current);
         };
-    }, [isRunning, drawLandmarks, pluginEngine]);
+    }, [isRunning, drawLandmarks, drawAirTrail, pluginEngine]);
 
     useEffect(() => {
         const handleSysHalt = () => {
@@ -881,6 +953,43 @@ export default function Console() {
                                     )}
                                 </div>
                             </div>
+                        </section>
+
+                        {/* Air drawing */}
+                        <section className="panel px-4 py-4">
+                            <div className="mb-3 flex items-center justify-between">
+                                <span className="label">Air drawing</span>
+                                <label className="flex items-center gap-2 text-[11px] text-[var(--ink-3)]">
+                                    <input
+                                        type="checkbox"
+                                        checked={airDraw}
+                                        onChange={(e) => setAirDraw(e.target.checked)}
+                                    />
+                                    {airDraw ? "On" : "Off"}
+                                </label>
+                            </div>
+                            {airDraw ? (
+                                <>
+                                    <p className="readout text-2xl text-[var(--ink)]">
+                                        {airShape ? airShape.name : "—"}
+                                    </p>
+                                    <p className="mt-1 text-[11px] text-[var(--ink-3)]">
+                                        {airShape
+                                            ? `${(airShape.score * 100).toFixed(0)}% match`
+                                            : "Pinch thumb and finger together to draw, open to finish."}
+                                    </p>
+                                    <p className="mt-3 text-[11px] leading-relaxed text-[var(--ink-3)]">
+                                        Knows {BUILT_IN_SHAPE_NAMES.join(", ")}. Size, position and
+                                        tilt do not matter — the shape does.
+                                    </p>
+                                </>
+                            ) : (
+                                <p className="text-[11px] leading-relaxed text-[var(--ink-3)]">
+                                    Draw a shape in the air with a pinched finger and it is matched
+                                    against known ones. Geometry, not a trained model, so a shape
+                                    can be taught from a single example.
+                                </p>
+                            )}
                         </section>
 
                         {/* Tracking stability */}
