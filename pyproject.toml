@@ -19,6 +19,13 @@ dependencies = [
     "torchvision>=0.18.0",
     "onnx>=1.16.0",
     "onnxruntime>=1.18.0",
+    # `torch.onnx.export` routes through the dynamo exporter by default on
+    # current torch, and that path imports onnxscript. torch does not depend on
+    # it, so `dextera.py export` — a documented command — raised
+    # ModuleNotFoundError on any clean install. It was present here only
+    # because something else had pulled it in transitively, which is why the
+    # models in this repo could be built locally and not from a fresh checkout.
+    "onnxscript>=0.1.0",
     "numpy>=1.26.0",
     "opencv-python-headless>=4.10.0",
     "scipy>=1.13.0",
@@ -59,12 +66,19 @@ bridge = [
 training = [
     "datasets>=2.19.0",
     "mlflow>=2.13.0",
+    # Imported inside `GestureTrainer.tune()`. Lazy, so it never broke a test
+    # run, but `dextera.py` exposes the tuner and it was declared nowhere.
+    "optuna>=3.6.0",
     "dvc>=3.50.0",
     "tensorboard>=2.16.0",
     "albumentations>=1.4.0",
 ]
 api = [
     "fastapi>=0.111.0",
+    # `backend/apps/api/middleware.py` imports starlette directly rather than
+    # re-exporting through fastapi, so it is a dependency of ours in its own
+    # right, not merely one of fastapi's.
+    "starlette>=0.37.0",
     "uvicorn[standard]>=0.29.0",
     "pydantic-settings>=2.3.0",
     "orjson>=3.10.0",
@@ -74,6 +88,10 @@ api = [
 tflite = [
     "tensorflow>=2.16.0",
     "ai-edge-litert>=1.0.0",
+    # `training/export/to_tflite.py` also needs `onnx-tf`, which is not listed
+    # here on purpose: it is unmaintained and does not install cleanly against
+    # current TensorFlow, so pinning it would break this whole extra. The
+    # export path raises with the exact install command instead.
 ]
 
 [project.scripts]

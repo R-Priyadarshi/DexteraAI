@@ -80,16 +80,30 @@ def export_to_onnx(
     wrapper = ExportWrapper(model)
     wrapper.eval()
 
-    torch.onnx.export(
-        wrapper,
-        (dummy_input, dummy_mask),
-        str(output_path),
-        opset_version=opset_version,
-        input_names=["input", "mask"],
-        output_names=["logits", "confidence"],
-        dynamic_axes=dynamic_axes if dynamic_axes else None,
-        do_constant_folding=True,
-    )
+    try:
+        torch.onnx.export(
+            wrapper,
+            (dummy_input, dummy_mask),
+            str(output_path),
+            opset_version=opset_version,
+            input_names=["input", "mask"],
+            output_names=["logits", "confidence"],
+            dynamic_axes=dynamic_axes if dynamic_axes else None,
+            do_constant_folding=True,
+        )
+    except ModuleNotFoundError as exc:  # pragma: no cover - depends on the install
+        # torch's dynamo-based exporter imports onnxscript, which torch itself
+        # does not depend on. Declared in this project's dependencies, so this
+        # only fires on a partial install — and a bare ModuleNotFoundError from
+        # inside torch gives no hint about which package to add.
+        if exc.name == "onnxscript":
+            raise ModuleNotFoundError(
+                "ONNX export needs onnxscript, which torch.onnx.export imports "
+                "but does not itself depend on. Install it with:\n"
+                "  pip install onnxscript\n"
+                'or reinstall this project: pip install -e "."'
+            ) from exc
+        raise
 
     # Validate
     onnx_model = onnx.load(str(output_path))
