@@ -42,6 +42,11 @@ dev = [
     "pytest-cov>=5.0.0",
     "pytest-benchmark>=4.0.0",
     "hypothesis>=6.100.0",
+    # `fastapi.testclient` is built on httpx, but neither fastapi nor starlette
+    # depends on it — starlette catches the missing import and re-raises it as
+    # RuntimeError, which is not an ImportError, so `pytest.importorskip` does
+    # not skip and collection aborts with exit code 2.
+    "httpx>=0.27.0",
     "ruff>=0.4.0",
     "mypy>=1.10.0",
     # CI's lint job runs bandit. It used to be listed in the workflow but

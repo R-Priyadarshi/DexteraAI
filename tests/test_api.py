@@ -18,11 +18,17 @@ import pytest
 # hard error that aborted the whole run — pytest exits 2 on a collection error,
 # so 137 passing tests were reported as a failure. Skip instead, and let CI
 # install the extra so these actually run rather than silently vanish.
-fastapi_testclient = pytest.importorskip(
-    "fastapi.testclient",
-    reason='FastAPI is not installed — run: pip install -e ".[api]"',
-)
-TestClient = fastapi_testclient.TestClient
+try:
+    from fastapi.testclient import TestClient
+except (ImportError, RuntimeError) as exc:  # noqa: F841
+    # Two distinct failures land here. Without fastapi it is ImportError; with
+    # fastapi but without httpx, starlette catches its own ModuleNotFoundError
+    # and re-raises RuntimeError — which `pytest.importorskip` does not catch,
+    # so it aborted collection and took 137 unrelated tests down with it.
+    pytest.skip(
+        f'API tests need fastapi and httpx: pip install -e ".[dev,api]" ({exc})',
+        allow_module_level=True,
+    )
 
 from backend.apps.api.main import app  # noqa: E402  (must follow the skip above)
 from tests.conftest import requires_mediapipe_bundle  # noqa: E402
