@@ -103,11 +103,23 @@ class TestPredict:
 class TestMountedSurface:
     """The documented surface and the served surface must agree."""
 
-    def test_only_expected_routes_are_mounted(self, client: TestClient) -> None:
-        paths = {route.path for route in app.routes if hasattr(route, "path")}
-        assert "/api/health" in paths
-        assert "/api/predict" in paths
-        assert "/api/ws/stream" in paths
+    # These ask the server what it serves, rather than reading `app.routes`.
+    # FastAPI 0.141 with starlette 1.6 stopped surfacing routes added by
+    # `include_router` there, so the introspecting version of the second test
+    # below went vacuous: `app.routes` returned only the docs endpoints, and an
+    # assertion that the quarantined routers are absent from it would have held
+    # just as well if they had been mounted. A security check that cannot fail
+    # is worse than no check, because it reads like one.
+
+    def test_expected_routes_are_served(self, client: TestClient) -> None:
+        assert client.get("/api/health").status_code == 200
+        # POST-only, so a GET is 405 rather than 404 — which is itself the
+        # proof that the route is mounted.
+        assert client.get("/api/predict").status_code == 405
+
+    def test_websocket_stream_is_mounted(self, client: TestClient) -> None:
+        with client.websocket_connect("/api/ws/stream"):
+            pass
 
     def test_experimental_routers_are_not_mounted(self, client: TestClient) -> None:
         """Quarantined sketches must stay off the network.
@@ -115,6 +127,5 @@ class TestMountedSurface:
         They have known path-traversal and SSRF defects; see
         backend/experimental/README.md.
         """
-        paths = {route.path for route in app.routes if hasattr(route, "path")}
         for leaked in ("/api/rbac/add_user", "/api/sync/upload", "/api/plugins"):
-            assert leaked not in paths, f"{leaked} must not be mounted"
+            assert client.get(leaked).status_code == 404, f"{leaked} must not be mounted"

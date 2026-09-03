@@ -80,6 +80,11 @@ training = [
 ]
 api = [
     "fastapi>=0.111.0",
+    # `/api/predict` takes an uploaded image, and FastAPI raises at app
+    # construction — not at request time — if python-multipart is absent. It is
+    # a runtime requirement of a library rather than an import of ours, so no
+    # static pass over this repo could have found it.
+    "python-multipart>=0.0.9",
     # `backend/apps/api/middleware.py` imports starlette directly rather than
     # re-exporting through fastapi, so it is a dependency of ours in its own
     # right, not merely one of fastapi's.
