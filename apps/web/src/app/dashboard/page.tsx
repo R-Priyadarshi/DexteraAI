@@ -9,6 +9,8 @@ import { PresentationPlugin } from "@/lib/plugins/presentation";
 import { BiometricGuard } from "@/components/BiometricGuard";
 import { GestureStudio } from "@/components/GestureStudio";
 import { MotionStudio } from "@/components/MotionStudio";
+import { DesktopBridge } from "@/components/DesktopBridge";
+import { bridgeClient } from "@/lib/bridge-client";
 import { MacroComposer } from "@/components/MacroComposer";
 import { macroEngine } from "@/lib/macro-engine";
 import { voiceEngine, type VoiceIntent } from "@/lib/voice-engine";
@@ -92,6 +94,7 @@ export default function Console() {
     const [isLocked, setIsLocked] = useState(true);
     const [isStudioOpen, setIsStudioOpen] = useState(false);
     const [isMotionOpen, setIsMotionOpen] = useState(false);
+    const [isBridgeOpen, setIsBridgeOpen] = useState(false);
 
     /**
      * Full-rate frame tap.
@@ -342,6 +345,15 @@ export default function Console() {
                             // A combo takes precedence: when two hands form a
                             // bound pair, firing the single-hand binding as
                             // well would run two actions for one intent.
+                            // Desktop bindings are independent of in-page ones:
+                            // a gesture may drive the OS, this page, or both,
+                            // and the bridge is a no-op when not connected.
+                            bridgeClient.dispatch(
+                                result.gestureName,
+                                result.phase,
+                                result.rejected
+                            );
+
                             const fired =
                                 actionRegistry.dispatchCombo(result) ??
                                 actionRegistry.dispatch(result);
@@ -451,6 +463,10 @@ export default function Console() {
                 <ActionMapper vocabulary={vocabulary} onClose={() => setIsMapperOpen(false)} />
             )}
             {isMacroOpen && <MacroComposer gesture={gesture} onClose={() => setIsMacroOpen(false)} />}
+            {isBridgeOpen && (
+                <DesktopBridge vocabulary={vocabulary} onClose={() => setIsBridgeOpen(false)} />
+            )}
+
             {isMotionOpen && (
                 <MotionStudio
                     subscribe={subscribeToFrames}
@@ -829,6 +845,9 @@ export default function Console() {
                                 className="btn"
                             >
                                 Motion
+                            </button>
+                            <button onClick={() => setIsBridgeOpen(true)} className="btn">
+                                Desktop
                             </button>
                             <button
                                 onClick={() =>
