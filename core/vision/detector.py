@@ -244,9 +244,7 @@ class MediaPipeHandDetector:
         height, width = annotated.shape[:2]
 
         for hand in detected:
-            points = [
-                (int(lm[0] * width), int(lm[1] * height)) for lm in hand.landmarks
-            ]
+            points = [(int(lm[0] * width), int(lm[1] * height)) for lm in hand.landmarks]
             for start_idx, end_idx in HAND_CONNECTIONS:
                 if start_idx < len(points) and end_idx < len(points):
                     cv2.line(annotated, points[start_idx], points[end_idx], (0, 255, 0), 2)
@@ -275,7 +273,10 @@ class MediaPipeHandDetector:
     def __del__(self) -> None:
         # Bare try/except, not contextlib.suppress: during interpreter shutdown
         # module globals (including contextlib) may already be None.
+        # nosec B110 — a destructor cannot meaningfully handle a failure and
+        # must not raise during interpreter shutdown, when the exception would
+        # be printed and ignored anyway.
         try:  # noqa: SIM105 - contextlib may be None during interpreter shutdown
             self.close()
-        except Exception:
+        except Exception:  # nosec B110
             pass

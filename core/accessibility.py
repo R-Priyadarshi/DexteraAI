@@ -27,15 +27,18 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     # ...add more translations...
 }
 
+
 def get_locale() -> str:
     lang, _ = locale.getdefaultlocale()
-    return lang.split('_')[0] if lang else "en"
+    return lang.split("_")[0] if lang else "en"
+
 
 def translate(key: str, lang: str | None = None) -> str:
     lang = lang or get_locale()
     if lang not in SUPPORTED_LANGUAGES:
         lang = "en"
     return TRANSLATIONS.get(lang, TRANSLATIONS["en"]).get(key, key)
+
 
 # Accessibility features
 class Accessibility:
@@ -50,6 +53,7 @@ class Accessibility:
     @staticmethod
     def privacy_notice() -> str:
         return translate("privacy")
+
 
 # Example usage
 if __name__ == "__main__":

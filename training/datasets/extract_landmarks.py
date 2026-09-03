@@ -122,6 +122,7 @@ def iter_hf_dataset(
     max_per_class: int | None,
     image_key: str,
     label_key: str,
+    revision: str = "main",
 ) -> tuple[list[str], Any]:
     """Stream a HuggingFace image-classification dataset.
 
@@ -131,7 +132,10 @@ def iter_hf_dataset(
     from datasets import load_dataset
 
     logger.info(f"Streaming HuggingFace dataset: {dataset_id} [{split}]")
-    ds = load_dataset(dataset_id, split=split, streaming=True)
+    # Pinning the revision matters for reproducibility as much as for supply
+    # chain: an unpinned dataset id resolves to whatever the hub serves today,
+    # so a re-run months later can silently train on different data.
+    ds = load_dataset(dataset_id, split=split, streaming=True, revision=revision)
 
     features = ds.features
     if label_key not in features:
@@ -172,9 +176,7 @@ def iter_image_dir(image_dir: Path, max_per_class: int | None) -> tuple[list[str
 
     def generator() -> Any:
         for label_idx, class_dir in enumerate(class_dirs):
-            files = sorted(
-                f for f in class_dir.iterdir() if f.suffix.lower() in IMAGE_SUFFIXES
-            )
+            files = sorted(f for f in class_dir.iterdir() if f.suffix.lower() in IMAGE_SUFFIXES)
             if max_per_class is not None:
                 files = files[:max_per_class]
             for f in files:
@@ -201,7 +203,9 @@ def iter_parquet(
     from datasets import load_dataset
 
     if label_names is None:
-        ds_probe = load_dataset(
+        # nosec B615 — reads a local file through the parquet loader; there is
+        # no hub download here and so nothing to pin.
+        ds_probe = load_dataset(  # nosec B615
             "parquet", data_files=str(parquet_paths[0]), split="train", streaming=True
         )
         label_feature = ds_probe.features.get(label_key)
@@ -217,7 +221,10 @@ def iter_parquet(
         from datasets import Image as HFImage
 
         for shard in parquet_paths:
-            ds = load_dataset("parquet", data_files=str(shard), split="train", streaming=True)
+            # nosec B615 — local file, as above.
+            ds = load_dataset(  # nosec B615
+                "parquet", data_files=str(shard), split="train", streaming=True
+            )
             # Skip PIL decoding: rows over the per-class cap are discarded without
             # ever paying for a decode, which dominates runtime on large datasets.
             with contextlib.suppress(Exception):
@@ -342,6 +349,16 @@ def main() -> None:
 
     parser.add_argument("--output", type=str, required=True, help="Output dataset directory")
     parser.add_argument("--split", type=str, default="train", help="HF split name")
+    parser.add_argument(
+        "--revision",
+        type=str,
+        default="main",
+        help=(
+            "HF dataset revision (branch, tag or commit). Pin a commit for a "
+            "reproducible extraction: 'main' resolves to whatever the hub serves "
+            "today, so a re-run later can silently use different data."
+        ),
+    )
     parser.add_argument("--image-key", type=str, default="image", help="HF image column")
     parser.add_argument("--label-key", type=str, default="label", help="HF label column")
     parser.add_argument(
@@ -363,9 +380,14 @@ def main() -> None:
 
     if args.hf_dataset:
         label_names, stream = iter_hf_dataset(
-            args.hf_dataset, args.split, args.max_per_class, args.image_key, args.label_key
+            args.hf_dataset,
+            args.split,
+            args.max_per_class,
+            args.image_key,
+            args.label_key,
+            args.revision,
         )
-        source_name = f"hf:{args.hf_dataset}:{args.split}"
+        source_name = f"hf:{args.hf_dataset}:{args.split}@{args.revision}"
     elif args.parquet_dir:
         shards = sorted(Path(args.parquet_dir).glob("*.parquet"))
         if not shards:

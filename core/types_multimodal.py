@@ -3,6 +3,7 @@ from typing import Any
 
 class MultimodalInput:
     """Unified representation for gesture, voice, and text inputs."""
+
     def __init__(
         self,
         gesture: Any | None = None,
@@ -24,7 +25,7 @@ class MultimodalInput:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> 'MultimodalInput':
+    def from_dict(cls, data: dict[str, Any]) -> "MultimodalInput":
         return cls(
             gesture=data.get("gesture"),
             voice=data.get("voice"),

@@ -45,10 +45,7 @@ class TestHolisticFeatures:
         # Two hands, upper-body pose and its presence flag, then the face key
         # points and theirs. The face block is always allocated even when face
         # tracking is off, so the width never depends on runtime configuration.
-        assert (
-            fx.feature_dim
-            == HAND_BLOCK_DIM * 2 + POSE_BLOCK_DIM + 1 + FACE_BLOCK_DIM + 1
-        )
+        assert fx.feature_dim == HAND_BLOCK_DIM * 2 + POSE_BLOCK_DIM + 1 + FACE_BLOCK_DIM + 1
         assert fx.feature_dim == 254
 
     def test_empty_result_is_all_zeros(self) -> None:
@@ -129,9 +126,7 @@ class TestHolisticFeatures:
             )
         )
         face_base = HAND_BLOCK_DIM * 2 + POSE_BLOCK_DIM + 1
-        np.testing.assert_allclose(
-            features[face_base : face_base + FACE_BLOCK_DIM], 0.0, atol=1e-6
-        )
+        np.testing.assert_allclose(features[face_base : face_base + FACE_BLOCK_DIM], 0.0, atol=1e-6)
 
     def test_position_is_relative_to_shoulder_midpoint(self) -> None:
         """A hand at the shoulder midpoint must encode as position zero."""

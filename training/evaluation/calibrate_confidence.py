@@ -59,9 +59,7 @@ class CalibrationResult:
         }
 
 
-def expected_calibration_error(
-    probs: np.ndarray, labels: np.ndarray, n_bins: int = 15
-) -> float:
+def expected_calibration_error(probs: np.ndarray, labels: np.ndarray, n_bins: int = 15) -> float:
     """Expected Calibration Error: mean gap between confidence and accuracy.
 
     Args:

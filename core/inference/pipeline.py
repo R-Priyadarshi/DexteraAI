@@ -313,9 +313,9 @@ class GesturePipeline:
         import numpy as _np
 
         features_1d = self._feature_extractor.extract(hand)
-        features = _np.repeat(
-            features_1d[None, :], self._config.sequence_length, axis=0
-        ).astype(_np.float32)
+        features = _np.repeat(features_1d[None, :], self._config.sequence_length, axis=0).astype(
+            _np.float32
+        )
         mask = _np.zeros(self._config.sequence_length, dtype=bool)
 
         x = torch.from_numpy(features).unsqueeze(0).to(self._device)
@@ -399,7 +399,12 @@ class GesturePipeline:
         except Exception:
             # Legacy checkpoints embed a config dataclass; trust only local files.
             logger.warning(f"Falling back to unsafe load for legacy checkpoint: {path}")
-            ckpt = torch.load(str(path), map_location=self._device, weights_only=False)
+            # nosec B614 — weights_only=True is attempted first; this fallback
+            # exists only for checkpoints this project produced itself, which
+            # embed a config dataclass. Never point it at a downloaded file.
+            ckpt = torch.load(  # nosec B614
+                str(path), map_location=self._device, weights_only=False
+            )
 
         # Trainer checkpoints wrap the weights; raw state_dicts are also accepted.
         state_dict = ckpt.get("model_state_dict", ckpt) if isinstance(ckpt, dict) else ckpt

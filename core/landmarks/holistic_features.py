@@ -141,7 +141,7 @@ class HolisticFeatureExtractor:
         if result.pose is None or result.shoulder_span <= 1e-6:
             return np.zeros(3, dtype=np.float32), 1.0
 
-        origin = (
-            (result.pose[LEFT_SHOULDER] + result.pose[RIGHT_SHOULDER]) / 2.0
-        ).astype(np.float32)
+        origin = ((result.pose[LEFT_SHOULDER] + result.pose[RIGHT_SHOULDER]) / 2.0).astype(
+            np.float32
+        )
         return origin, float(result.shoulder_span)

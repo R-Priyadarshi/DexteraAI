@@ -51,6 +51,9 @@ bridge = [
     # input is not something a default install should be able to do.
     "pynput>=1.7.6",
     "websockets>=12.0",
+    # CI's lint job runs bandit; without it declared here the step failed on a
+    # missing command rather than on any finding.
+    "bandit>=1.7.0",
 ]
 training = [
     "datasets>=2.19.0",

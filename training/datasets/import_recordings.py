@@ -29,6 +29,7 @@ import argparse
 import json
 from collections import Counter
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from loguru import logger
@@ -38,7 +39,7 @@ MOTION_PACK_VERSION = 1
 LANDMARKS_PER_FRAME = 21
 
 
-def load_pack(path: Path) -> tuple[list[dict], int]:
+def load_pack(path: Path) -> tuple[list[dict[str, Any]], int]:
     """Read one pack, returning its clips and declared frame count."""
     data = json.loads(path.read_text())
 
@@ -54,7 +55,7 @@ def load_pack(path: Path) -> tuple[list[dict], int]:
     return clips, int(data.get("frameCount", 30))
 
 
-def clip_to_array(clip: dict) -> np.ndarray | None:
+def clip_to_array(clip: dict[str, Any]) -> np.ndarray | None:
     """Convert one clip's frames to (seq_len, 21, 3), or None if malformed.
 
     Recordings come from a browser and may have been edited or merged by hand,
@@ -148,7 +149,7 @@ def main() -> int:
                 return 1
             paths.extend(matched)
 
-    all_clips: list[dict] = []
+    all_clips: list[dict[str, Any]] = []
     declared_len: int | None = None
     for path in paths:
         clips, frame_count = load_pack(path)
@@ -175,9 +176,7 @@ def main() -> int:
 
     # ── Drop under-represented labels ─────────────────────────
     dropped = {
-        label: len(clips)
-        for label, clips in by_label.items()
-        if len(clips) < args.min_clips
+        label: len(clips) for label, clips in by_label.items() if len(clips) < args.min_clips
     }
     for label in dropped:
         del by_label[label]
@@ -204,13 +203,13 @@ def main() -> int:
     index = 0
     written = Counter[str]()
     for label_id, label in enumerate(labels):
-        for clip in by_label[label]:
-            variants = [clip]
+        for sequence in by_label[label]:
+            variants = [sequence]
             if args.mirror:
                 # x is normalised to [0, 1], so mirroring is 1 - x. Only the
                 # coordinate is flipped: doing anything to y or z would change
                 # the gesture rather than reflect it.
-                mirrored = clip.copy()
+                mirrored = sequence.copy()
                 mirrored[:, :, 0] = 1.0 - mirrored[:, :, 0]
                 variants.append(mirrored)
 
@@ -239,9 +238,7 @@ def main() -> int:
         + "\n"
     )
 
-    logger.success(
-        f"Wrote {index} samples across {len(labels)} classes to {out_dir}"
-    )
+    logger.success(f"Wrote {index} samples across {len(labels)} classes to {out_dir}")
     for label in labels:
         logger.info(f"  {label}: {written[label]}")
 

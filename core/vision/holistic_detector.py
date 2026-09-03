@@ -64,10 +64,21 @@ NUM_POSE_LANDMARKS = 33
 # dimensions under ~1400 face dimensions and make the hands the minority signal
 # in a hand-centric task.
 FACE_KEY_POINTS: tuple[int, ...] = (
-    55, 65, 52, 285, 295, 282,   # brows: inner, mid, outer (left, then right)
-    159, 145, 386, 374,          # eyes: upper and lower lids
-    61, 291, 13, 14,             # mouth: corners, upper and lower lip centres
-    1,                           # nose tip, a stable facial anchor
+    55,
+    65,
+    52,
+    285,
+    295,
+    282,  # brows: inner, mid, outer (left, then right)
+    159,
+    145,
+    386,
+    374,  # eyes: upper and lower lids
+    61,
+    291,
+    13,
+    14,  # mouth: corners, upper and lower lip centres
+    1,  # nose tip, a stable facial anchor
 )
 NUM_FACE_KEY_POINTS = len(FACE_KEY_POINTS)
 
@@ -82,7 +93,7 @@ DEFAULT_FACE_MODEL_PATHS = (
 )
 
 UPPER_BODY_INDICES = (
-    0,   # nose
+    0,  # nose
     11,  # left shoulder
     12,  # right shoulder
     13,  # left elbow
@@ -320,19 +331,14 @@ class MediaPipeHolisticDetector:
             if self._static_image_mode:
                 face_result = self._face_landmarker.detect(mp_image)
             else:
-                face_result = self._face_landmarker.detect_for_video(
-                    mp_image, timestamp_ms
-                )
+                face_result = self._face_landmarker.detect_for_video(mp_image, timestamp_ms)
             if face_result.face_landmarks:
                 mesh = face_result.face_landmarks[0]
                 # Guard the indices: the mesh size differs between model
                 # variants, and an out-of-range point would raise mid-frame.
                 if max(FACE_KEY_POINTS) < len(mesh):
                     face = np.array(
-                        [
-                            [mesh[i].x, mesh[i].y, mesh[i].z]
-                            for i in FACE_KEY_POINTS
-                        ],
+                        [[mesh[i].x, mesh[i].y, mesh[i].z] for i in FACE_KEY_POINTS],
                         dtype=np.float32,
                     )
 
@@ -368,7 +374,10 @@ class MediaPipeHolisticDetector:
         self.close()
 
     def __del__(self) -> None:
+        # nosec B110 — a destructor cannot meaningfully handle a failure and
+        # must not raise during interpreter shutdown, when the exception would
+        # be printed and ignored anyway.
         try:  # noqa: SIM105 - contextlib may be None during interpreter shutdown
             self.close()
-        except Exception:
+        except Exception:  # nosec B110
             pass

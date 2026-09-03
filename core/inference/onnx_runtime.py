@@ -96,6 +96,7 @@ class ONNXInferenceRuntime:
             elif hasattr(v, "shape"):
                 try:
                     import numpy as np
+
                     masked[k] = np.zeros_like(v)
                 except ImportError:
                     masked[k] = v
@@ -135,9 +136,7 @@ class ONNXInferenceRuntime:
             # accepted as arguments and then silently ignored.
             options = ort.SessionOptions()
             options.intra_op_num_threads = self._num_threads
-            options.graph_optimization_level = (
-                ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-            )
+            options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
             options.enable_profiling = self._enable_profiling
 
             self._session = ort.InferenceSession(
@@ -153,12 +152,12 @@ class ONNXInferenceRuntime:
             )
         except RuntimeError as e:
             self._log.error(f"Failed to load ONNX model: {e}")
-            if 'NO_SUCHFILE' in str(e):
+            if "NO_SUCHFILE" in str(e):
                 raise FileNotFoundError(f"Model file not found: {model_path}") from e
             raise
         except Exception as e:
             self._log.error(f"Failed to load ONNX model: {e}")
-            if 'NO_SUCHFILE' in str(e):
+            if "NO_SUCHFILE" in str(e):
                 raise FileNotFoundError(f"Model file not found: {model_path}") from e
             raise
 

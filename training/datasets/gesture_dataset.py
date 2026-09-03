@@ -187,9 +187,9 @@ class GestureSequenceDataset(Dataset):  # type: ignore[type-arg]
 
             features[:] = base
             if self._augmentor:
-                features += self._rng.normal(
-                    0.0, self._static_jitter, size=features.shape
-                ).astype(np.float32)
+                features += self._rng.normal(0.0, self._static_jitter, size=features.shape).astype(
+                    np.float32
+                )
             mask[:] = False
         else:
             if self._expand_static and seq_len_actual < self._seq_len:

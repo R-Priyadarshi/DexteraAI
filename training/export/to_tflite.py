@@ -91,13 +91,12 @@ def export_to_tflite(
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
             converter.target_spec.supported_types = [tf.float16]
         elif quantize == "int8":
+            # Guaranteed non-None by the validation above; asserted so the type
+            # checker can see what the guard already established.
+            assert representative_data is not None
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
-            converter.representative_dataset = _make_representative_dataset(
-                representative_data
-            )
-            converter.target_spec.supported_ops = [
-                tf.lite.OpsSet.TFLITE_BUILTINS_INT8
-            ]
+            converter.representative_dataset = _make_representative_dataset(representative_data)
+            converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
 
         tflite_model = converter.convert()
         output_path.write_bytes(tflite_model)

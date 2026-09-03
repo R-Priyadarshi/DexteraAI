@@ -19,9 +19,7 @@ from training.evaluation.calibrate_confidence import (
 )
 
 
-def _write_dataset(
-    directory: Path, labels: list[str], per_class: int = 4, seed: int = 0
-) -> Path:
+def _write_dataset(directory: Path, labels: list[str], per_class: int = 4, seed: int = 0) -> Path:
     """Create a minimal extracted-dataset directory."""
     seq_dir = directory / "sequences"
     seq_dir.mkdir(parents=True, exist_ok=True)
@@ -36,9 +34,7 @@ def _write_dataset(
                 handedness="right",
             )
             index += 1
-    (directory / "metadata.json").write_text(
-        json.dumps({"labels": labels, "count": index})
-    )
+    (directory / "metadata.json").write_text(json.dumps({"labels": labels, "count": index}))
     return directory
 
 
@@ -176,9 +172,7 @@ class TestConfidenceCalibration:
 
         from training.evaluation.calibrate_confidence import calibrate
 
-        model = GestureTransformer(
-            input_dim=86, num_classes=4, d_model=32, nhead=2, num_layers=1
-        )
+        model = GestureTransformer(input_dim=86, num_classes=4, d_model=32, nhead=2, num_layers=1)
         features = torch.randn(24, 10, 86)
         labels = torch.randint(0, 4, (24,))
         masks = torch.zeros(24, 10, dtype=torch.bool)

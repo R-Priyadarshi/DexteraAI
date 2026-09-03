@@ -201,6 +201,7 @@ class UserCalibrator:
 
     def _now(self) -> str:
         import datetime
+
         return datetime.datetime.now(datetime.UTC).isoformat()
 
     def _profile_to_dict(self) -> dict[str, Any]:

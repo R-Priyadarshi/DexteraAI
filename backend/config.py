@@ -29,10 +29,18 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     # ── Server ───────────────────────────────────────────────
-    host: str = "0.0.0.0"
+    # Loopback by default. This product runs inference on-device and the API
+    # exists for demos and integration tests; it has no authentication, so
+    # binding every interface would put an unauthenticated endpoint on the
+    # local network the moment anyone runs it. Deployments that genuinely need
+    # to serve other machines set DEXTERA_HOST explicitly and are then choosing
+    # that exposure knowingly.
+    host: str = "127.0.0.1"
     port: int = 8000
     workers: int = 1
-    cors_origins: list[str] = ["*"]
+    # Same reasoning: "*" combined with no auth lets any page on any origin
+    # call the API. The dev server's own origins are the useful default.
+    cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
     # ── Model paths ──────────────────────────────────────────
     # Default to the trained HaGRID bundle (18 gestures). The pipeline reads

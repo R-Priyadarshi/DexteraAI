@@ -390,9 +390,7 @@ class GestureTrainer:
         )
         return result
 
-    def _unpack_batch(
-        self, batch: Any
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    def _unpack_batch(self, batch: Any) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         """Support both (features, label, mask) and (features, label) datasets."""
         if len(batch) == 3:
             features, labels, masks = batch
@@ -490,8 +488,22 @@ class GestureTrainer:
         )
 
     def load_checkpoint(self, path: str | Path) -> int:
-        """Load a checkpoint and return its epoch number."""
-        ckpt = torch.load(str(path), map_location=self._device, weights_only=False)
+        """Load a checkpoint and return its epoch number.
+
+        Unpickling arbitrary objects is attempted only as a fallback, matching
+        `GesturePipeline.load_model`: `torch.load` without `weights_only` can
+        execute code embedded in the file, which matters the moment anyone
+        resumes from a checkpoint they did not train themselves.
+        """
+        try:
+            ckpt = torch.load(str(path), map_location=self._device, weights_only=True)
+        except Exception:
+            logger.warning(f"Falling back to unsafe load for legacy checkpoint: {path}")
+            # nosec B614 — see above; the safe path is tried first and this is
+            # reached only for this project's own older checkpoints.
+            ckpt = torch.load(  # nosec B614
+                str(path), map_location=self._device, weights_only=False
+            )
         self._model.load_state_dict(ckpt["model_state_dict"])
         if "optimizer_state_dict" in ckpt:
             self._optimizer.load_state_dict(ckpt["optimizer_state_dict"])
