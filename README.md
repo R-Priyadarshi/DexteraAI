@@ -138,16 +138,11 @@ Stated plainly, because the alternative is a promise the code does not keep:
   standard corpus, is research-licensed.
 - **Continuous sign-language translation** is out of scope. Recognizing isolated
   signs is a different and much easier problem than translating fluent signing.
-- **Several recognised gestures are offensive in parts of the world.** The
-  vocabulary comes from HaGRID and is not culturally neutral: `ok` is obscene in
-  Brazil, Turkey and Greece and has been appropriated as a hate symbol
-  elsewhere; `peace_inverted` is a serious insult across the UK, Ireland,
-  Australia and New Zealand; `rock` implies infidelity in Italy, Spain and
-  Portugal; `like` is offensive in parts of the Middle East and West Africa. Two
-  of the eight default bindings (`ok`, `like`) are affected. Recognising a
-  gesture is not the same as requiring it, and every binding is remappable at
-  runtime — but anyone shipping this to a specific region should choose the
-  defaults for that region rather than inherit these.
+- **The vocabulary is not culturally neutral.** It comes from HaGRID, and a few
+  of its gestures — `ok`, `peace_inverted`, `rock`, `like` — carry offensive
+  readings in some regions, including parts of Europe and the US. Recognising a
+  gesture is not requiring it, and every binding is remappable at runtime, so
+  this is a question of which defaults ship rather than a limit of the model.
 - **Linux is the only verified platform.** Everything here was developed and is
   tested on Ubuntu, and CI runs on `ubuntu-latest` for Python 3.11 and 3.12. The
   matrix previously also claimed macOS and Windows; those cells failed, and

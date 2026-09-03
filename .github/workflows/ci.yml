@@ -74,13 +74,32 @@ jobs:
         run: bandit -r core/ training/ backend/ bridge/ --skip B101,B102,B103
 
   test:
-    name: Tests (${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    name: Tests (${{ matrix.os }}, ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
     strategy:
-      # Report every cell. A failure on 3.12 should not hide the 3.11 result.
+      # Report every cell. A failure on 3.12 should not hide the 3.11 result,
+      # and a failure on Windows should not hide macOS.
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        # Python versions are swept on Linux; the other platforms run one
+        # version each. The point of those cells is to catch OS assumptions —
+        # path separators, file modes, line endings — not interpreter drift,
+        # and a full cross product would triple the runtime to re-test that.
+        include:
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: ubuntu-latest
+            python-version: "3.12"
+          - os: macos-latest
+            python-version: "3.12"
+          - os: windows-latest
+            python-version: "3.12"
+    defaults:
+      run:
+        # Windows runners default to PowerShell, where the `pip install -e ".[…]"`
+        # quoting and `mkdir -p` below behave differently. Git Bash ships on all
+        # three images, so one shell keeps the steps identical everywhere.
+        shell: bash
     steps:
       - uses: actions/checkout@v7
 
@@ -103,6 +122,7 @@ jobs:
       # like a code failure and is a missing system package. MediaPipe 0.10.x
       # did not need this; 1.0.x does.
       - name: System libraries for MediaPipe
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libgles2
 
       - name: Fetch MediaPipe bundles
