@@ -46,27 +46,65 @@ A closed-set classifier is finite by construction, so breadth comes from two pla
 
 - **The trained vocabulary** above, as wide as licensing and data allow.
 - **Teach-it-yourself.** Anything the model does not know, a user records in the
-  browser in a few seconds. Samples are stored locally and matched with weighted
-  k-NN over the same 86-dim features. See `apps/web/src/lib/gesture-store.ts`.
+  browser in a few seconds. Each taught gesture becomes a prototype — a mean
+  vector plus the spread of its own samples — and a query is scored in units of
+  that spread, so tight and loose gestures are not held to one absolute
+  threshold. See `apps/web/src/lib/few-shot.ts`. Gestures export as a JSON pack
+  of landmark coordinates, so they move between machines.
+- **Two-handed combinations.** Both hands are recognised independently, each with
+  its own temporal window and segmenter, and composed into an ordered pair. This
+  is not a two-hand *model* — the shipped models are trained on one hand — but it
+  squares the command surface: 18 labels give 324 ordered pairs.
 
 Confidence is calibrated (temperature scaling) so gestures outside the vocabulary
-are reported as unrecognized rather than confidently mislabeled. See
-`training/evaluation/calibrate_confidence.py`.
+are reported as unrecognized rather than confidently mislabeled. Both shipped
+bundles are calibrated: general gestures at T=0.736, ASL at T=0.843. See
+`training/evaluation/calibrate_confidence.py`, and `scripts/calibrate_bundle.py`
+to calibrate an existing checkpoint without retraining.
+
+### From label to action
+
+Recognition emits a label per frame; acting on that requires knowing when a
+gesture *starts*. `apps/web/src/lib/gesture-segmenter.ts` converts the
+per-frame stream into onset/hold/offset events with entry debounce, exit
+hysteresis and a refractory period — without it, a held pose fires its bound
+action ~30 times a second.
+
+Bindings are keyed by gesture label rather than class index, since an index
+belongs to whichever bundle is loaded and would silently re-point at an
+unrelated gesture on a bundle swap.
+
+Three ways to act on a gesture:
+
+- **In-page actions** — scroll, deck navigation, plugin handlers.
+- **Desktop actions** via the local bridge (`python -m bridge.server`) — media
+  keys, volume, slides, window switching. Loopback-only and token-authenticated;
+  see [bridge/README.md](bridge/README.md) for the threat model.
+- **Hands-free pointer** — the index fingertip drives a cursor, and holding
+  still for ~900ms clicks. This is the accessibility path: a vocabulary of
+  discrete poses cannot reach an arbitrary target, only trigger a fixed binding.
 
 ### Known scope limits
 
 Stated plainly, because the alternative is a promise the code does not keep:
 
-- **Dynamic gestures** (swipes, waves) are handled in the browser by velocity
-  heuristics, not by a trained temporal model. The obvious training corpus
-  (Jester) is licensed non-commercial. See [docs/DATASET_LICENSES.md](docs/DATASET_LICENSES.md).
+- **Dynamic gestures are not in the shipped models.** Both bundles report
+  `frames_per_sequence: 1` — every training sample is a still image replicated
+  across the 30-frame window. The architecture is a temporal Transformer, but it
+  has never been shown motion, so swipes and waves have no class to fall under
+  and are handled by velocity heuristics instead. The obvious corpus (Jester) is
+  licensed non-commercial, so the path provided is to record your own: the
+  console's **Motion** panel captures clips at the model's window length, and
+  `training/datasets/import_recordings.py` converts them into a trainable
+  dataset. See [docs/DATASET_LICENSES.md](docs/DATASET_LICENSES.md).
 - **Word-level sign language** has the input path built but no trained model.
   `core/vision/holistic_detector.py` and `core/landmarks/holistic_features.py`
-  produce a 208-dim body-relative feature vector (both hands + upper-body pose,
-  scaled by shoulder span), which is what word-level signing needs. What is
-  missing is training data that can actually ship: WLASL, the standard corpus, is
-  research-licensed. Face landmarks are also not included, and ASL uses non-manual
-  markers grammatically.
+  produce a 254-dim body-relative feature vector — both hands, upper-body pose,
+  and the face points carrying non-manual markers, all scaled by shoulder span.
+  ASL marks yes/no questions with raised brows, wh-questions with lowered brows,
+  and negation with the mouth, so a hands-only model has a ceiling regardless of
+  hand data. What is missing is training data that can actually ship: WLASL, the
+  standard corpus, is research-licensed.
 - **Continuous sign-language translation** is out of scope. Recognizing isolated
   signs is a different and much easier problem than translating fluent signing.
 
@@ -77,7 +115,7 @@ Stated plainly, because the alternative is a promise the code does not keep:
 ```bash
 python3.11 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev,api,training]"
-make fetch-models          # downloads the MediaPipe hand + pose bundles
+make fetch-models          # MediaPipe hand + pose + face bundles
 python dextera.py info
 ```
 
@@ -94,7 +132,25 @@ python -m training.datasets.extract_landmarks \
     --parquet-dir data/raw/asl_parquet --output data/sequences/asl_alphabet
 
 python dextera.py train --dataset data/sequences/asl_alphabet \
-    --epochs 80 --export models/asl_alphabet
+    --epochs 80 --calibrate --export models/asl_alphabet
+```
+
+Train dynamic gestures from your own recordings (the console's **Motion** panel
+exports the pack):
+
+```bash
+python training/datasets/import_recordings.py \
+    --pack ~/Downloads/dextera-motion-*.json --out data/sequences/motion --mirror
+
+python dextera.py train --dataset data/sequences/motion \
+    --epochs 120 --calibrate --export models/motion
+```
+
+Control the desktop rather than just the tab:
+
+```bash
+pip install -e ".[bridge]"
+python -m bridge.server        # prints a token; paste it into the Desktop panel
 ```
 
 Full walkthrough in [ONBOARDING.md](ONBOARDING.md).
@@ -191,7 +247,7 @@ docker build -t dextera-ai . && docker run -p 8000:8000 dextera-ai
 ```bash
 make lint          # ruff + mypy
 make test          # pytest
-cd apps/web && npx tsc --noEmit && npm run build
+cd apps/web && npx tsc --noEmit && npm test && npm run build
 ```
 
 CI runs lint, types, tests, an end-to-end wiring smoke test, and the web build.
