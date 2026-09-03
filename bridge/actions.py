@@ -8,81 +8,147 @@ code execution primitive with extra steps.
 
 Adding a capability means adding it here, deliberately, with a name the user
 sees in the console. It cannot be reached by crafting a message.
+
+Actions are declared as data and only resolved to real input calls when one is
+executed. Importing this module therefore touches no input device and does not
+require `pynput` to be installed — which matters because importing it used to
+do both: `pynput` opens an X connection at import, so on a headless machine the
+import raised `ImportError: failed to acquire X connection`, taking the whole
+test suite down with it. A registry you cannot inspect without a display is
+also a registry you cannot test.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import Any, Literal
 
 from loguru import logger
-from pynput.keyboard import Controller as KeyboardController
-from pynput.keyboard import Key
-from pynput.mouse import Button
-from pynput.mouse import Controller as MouseController
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
-
-_keyboard = KeyboardController()
-_mouse = MouseController()
+# What an action does, as data. Resolved against pynput at execution time.
+ActionKind = Literal["tap", "chord", "scroll", "click"]
 
 
 @dataclass(frozen=True, slots=True)
 class BridgeAction:
-    """One thing a gesture may do to the operating system."""
+    """One thing a gesture may do to the operating system.
+
+    `kind` and `target` describe the action rather than performing it, so the
+    registry can be listed, validated and tested without a display.
+    """
 
     id: str
     name: str
     category: str
     description: str
-    run: Callable[[], None]
+    kind: ActionKind
+    target: Any
 
 
-def _tap(key: object) -> Callable[[], None]:
-    def action() -> None:
-        _keyboard.press(key)  # type: ignore[arg-type]
-        _keyboard.release(key)  # type: ignore[arg-type]
-
-    return action
+class InputUnavailableError(RuntimeError):
+    """Raised when input injection cannot be performed on this machine."""
 
 
-def _chord(*keys: object) -> Callable[[], None]:
-    """Press modifiers, tap the final key, release in reverse order.
+# Controllers are created once, on first use, and cached here. Module-level
+# instantiation would open an X connection at import time.
+_controllers: dict[str, Any] = {}
 
-    Reverse-order release matters: leaving a modifier stuck down because an
-    exception unwound the presses would make the keyboard unusable until the
-    user noticed and pressed it themselves.
+
+def _get_controllers() -> tuple[Any, Any, Any, Any]:
+    """Return (keyboard, mouse, Key, Button), importing pynput on first use.
+
+    Deferred because `pynput` is an optional dependency (the `bridge` extra)
+    and because it acquires a display connection eagerly — neither of which
+    should be a precondition for importing this module.
     """
+    if "keyboard" not in _controllers:
+        try:
+            from pynput.keyboard import Controller as KeyboardController
+            from pynput.keyboard import Key
+            from pynput.mouse import Button
+            from pynput.mouse import Controller as MouseController
+        except ImportError as exc:
+            # pynput raises ImportError for two quite different reasons: the
+            # package is absent, or it is present but cannot reach a display
+            # server (it opens an X connection at import). Reporting "install
+            # pynput" to someone on a headless box would send them in circles.
+            import importlib.util
 
-    def action() -> None:
-        *modifiers, final = keys
-        pressed: list[object] = []
+            installed = importlib.util.find_spec("pynput") is not None
+            if installed:
+                raise InputUnavailableError(
+                    f"pynput cannot reach a display server: {exc}. "
+                    "Input injection needs an X session; Wayland is not supported."
+                ) from exc
+            raise InputUnavailableError(
+                'Input injection needs pynput. Install it with: pip install -e ".[bridge]"'
+            ) from exc
+
+        try:
+            _controllers["keyboard"] = KeyboardController()
+            _controllers["mouse"] = MouseController()
+        except Exception as exc:
+            # No display, or a platform pynput cannot drive. Wayland reaches
+            # here too, which is why bridge/README.md says so plainly.
+            raise InputUnavailableError(
+                f"Input injection is unavailable on this display server: {exc}"
+            ) from exc
+
+        _controllers["Key"] = Key
+        _controllers["Button"] = Button
+
+    return (
+        _controllers["keyboard"],
+        _controllers["mouse"],
+        _controllers["Key"],
+        _controllers["Button"],
+    )
+
+
+def is_available() -> bool:
+    """Whether this machine can actually inject input."""
+    try:
+        _get_controllers()
+    except InputUnavailableError:
+        return False
+    return True
+
+
+def _perform(action: BridgeAction) -> None:
+    """Resolve an action's declared intent against pynput and run it."""
+    # `key_enum` and `button_enum` are pynput's Key and Button classes; named
+    # in lower case because they are locals, not class definitions.
+    keyboard, mouse, key_enum, button_enum = _get_controllers()
+
+    if action.kind == "tap":
+        key = getattr(key_enum, action.target)
+        keyboard.press(key)
+        keyboard.release(key)
+
+    elif action.kind == "chord":
+        # Press modifiers, tap the final key, release in reverse order. Reverse
+        # release matters: a modifier left stuck down because an exception
+        # unwound the presses makes the keyboard unusable until the user
+        # notices and presses it themselves.
+        *modifier_names, final_name = action.target
+        modifiers = [getattr(key_enum, n) for n in modifier_names]
+        final = getattr(key_enum, final_name)
+        pressed: list[Any] = []
         try:
             for modifier in modifiers:
-                _keyboard.press(modifier)  # type: ignore[arg-type]
+                keyboard.press(modifier)
                 pressed.append(modifier)
-            _keyboard.press(final)  # type: ignore[arg-type]
-            _keyboard.release(final)  # type: ignore[arg-type]
+            keyboard.press(final)
+            keyboard.release(final)
         finally:
             for modifier in reversed(pressed):
-                _keyboard.release(modifier)  # type: ignore[arg-type]
+                keyboard.release(modifier)
 
-    return action
+    elif action.kind == "scroll":
+        mouse.scroll(0, action.target)
 
-
-def _scroll(dy: int) -> Callable[[], None]:
-    def action() -> None:
-        _mouse.scroll(0, dy)
-
-    return action
-
-
-def _click(button: Button) -> Callable[[], None]:
-    def action() -> None:
-        _mouse.click(button)
-
-    return action
+    elif action.kind == "click":
+        mouse.click(getattr(button_enum, action.target))
 
 
 # The registry. Media keys are the highest-value bindings because they work
@@ -90,76 +156,54 @@ def _click(button: Button) -> Callable[[], None]:
 # integration.
 _ACTIONS: tuple[BridgeAction, ...] = (
     BridgeAction(
-        "media_play_pause",
-        "Play / pause",
-        "media",
+        "media_play_pause", "Play / pause", "media",
         "Toggles playback in whichever app owns media keys.",
-        _tap(Key.media_play_pause),
+        "tap", "media_play_pause",
     ),
     BridgeAction(
-        "media_next",
-        "Next track",
-        "media",
-        "Skips to the next track.",
-        _tap(Key.media_next),
+        "media_next", "Next track", "media",
+        "Skips to the next track.", "tap", "media_next",
     ),
     BridgeAction(
-        "media_previous",
-        "Previous track",
-        "media",
-        "Returns to the previous track.",
-        _tap(Key.media_previous),
+        "media_previous", "Previous track", "media",
+        "Returns to the previous track.", "tap", "media_previous",
     ),
     BridgeAction(
-        "volume_up", "Volume up", "media", "Raises system volume.", _tap(Key.media_volume_up)
+        "volume_up", "Volume up", "media",
+        "Raises system volume.", "tap", "media_volume_up",
     ),
     BridgeAction(
-        "volume_down",
-        "Volume down",
-        "media",
-        "Lowers system volume.",
-        _tap(Key.media_volume_down),
+        "volume_down", "Volume down", "media",
+        "Lowers system volume.", "tap", "media_volume_down",
     ),
     BridgeAction(
-        "volume_mute", "Mute", "media", "Toggles mute.", _tap(Key.media_volume_mute)
+        "volume_mute", "Mute", "media",
+        "Toggles mute.", "tap", "media_volume_mute",
     ),
     BridgeAction(
-        "slide_next",
-        "Next slide",
-        "presentation",
+        "slide_next", "Next slide", "presentation",
         "Sends Page Down, which advances most presentation software.",
-        _tap(Key.page_down),
+        "tap", "page_down",
     ),
     BridgeAction(
-        "slide_previous",
-        "Previous slide",
-        "presentation",
-        "Sends Page Up.",
-        _tap(Key.page_up),
+        "slide_previous", "Previous slide", "presentation",
+        "Sends Page Up.", "tap", "page_up",
     ),
     BridgeAction(
-        "scroll_up", "Scroll up", "navigation", "Scrolls the focused window up.", _scroll(3)
+        "scroll_up", "Scroll up", "navigation",
+        "Scrolls the focused window up.", "scroll", 3,
     ),
     BridgeAction(
-        "scroll_down",
-        "Scroll down",
-        "navigation",
-        "Scrolls the focused window down.",
-        _scroll(-3),
+        "scroll_down", "Scroll down", "navigation",
+        "Scrolls the focused window down.", "scroll", -3,
     ),
     BridgeAction(
-        "switch_window",
-        "Switch window",
-        "navigation",
-        "Alt-Tab to the previously focused window.",
-        _chord(Key.alt, Key.tab),
+        "switch_window", "Switch window", "navigation",
+        "Alt-Tab to the previously focused window.", "chord", ("alt", "tab"),
     ),
     BridgeAction(
-        "click_left",
-        "Click",
-        "pointer",
-        "Left mouse click at the current cursor position.",
-        _click(Button.left),
+        "click_left", "Click", "pointer",
+        "Left mouse click at the current cursor position.", "click", "left",
     ),
 )
 
@@ -190,7 +234,10 @@ def run(action_id: str) -> bool:
         return False
 
     try:
-        action.run()
+        _perform(action)
+    except InputUnavailableError as exc:
+        logger.error(f"Cannot perform {action_id}: {exc}")
+        return False
     except Exception as exc:
         logger.error(f"Action {action_id} failed: {exc}")
         return False

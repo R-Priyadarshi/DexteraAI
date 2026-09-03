@@ -38,6 +38,13 @@ dev = [
     "ruff>=0.4.0",
     "mypy>=1.10.0",
     "pre-commit>=3.7.0",
+    # The bridge's own dependencies, so CI actually exercises it. Both are
+    # small and pure Python. `pynput` cannot inject input on a headless runner,
+    # but `bridge.actions` defers acquiring a controller until an action is
+    # executed, so the registry, the token handling and the origin policy are
+    # all testable without a display.
+    "pynput>=1.7.6",
+    "websockets>=12.0",
 ]
 bridge = [
     # Desktop control. Optional because the daemon is opt-in and injecting

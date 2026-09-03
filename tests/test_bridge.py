@@ -15,6 +15,45 @@ from bridge import actions
 from bridge.server import Bridge, load_or_create_token
 
 
+class TestImportSafety:
+    def test_registry_is_usable_without_a_display(self) -> None:
+        """Importing must not require an input device.
+
+        `pynput` opens an X connection when imported, so acquiring a controller
+        at module scope made `import bridge.actions` raise on any headless
+        machine — taking the entire test suite down with it, since collection
+        imports every test module. CI runners are headless by definition.
+        """
+        import subprocess
+        import sys
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from bridge import actions;"
+                "print(len(actions.describe()));"
+                "print(actions.run('nope'))",
+            ],
+            capture_output=True,
+            text=True,
+            env={"PATH": os.environ.get("PATH", "")},  # no DISPLAY
+        )
+        assert result.returncode == 0, result.stderr
+        assert "12" in result.stdout
+        assert "False" in result.stdout
+
+    def test_availability_is_reported_not_raised(self) -> None:
+        # A machine that cannot inject input is a supported configuration —
+        # Wayland, a headless server — and must be reportable rather than fatal.
+        assert isinstance(actions.is_available(), bool)
+
+    def test_action_on_an_unavailable_machine_returns_false(self) -> None:
+        # Never raises: the bridge serves clients, and one impossible action
+        # must not close the connection.
+        assert actions.run("definitely_not_an_action") is False
+
+
 class TestActionRegistry:
     def test_every_action_is_described(self) -> None:
         described = {a["id"] for a in actions.describe()}
@@ -27,6 +66,12 @@ class TestActionRegistry:
         assert actions.run("definitely_not_an_action") is False
         assert actions.run("") is False
         assert actions.run("__import__('os').system('id')") is False
+
+    def test_every_action_declares_a_known_kind(self) -> None:
+        # Actions are data, resolved against pynput only at execution time. An
+        # unknown kind would silently do nothing rather than fail loudly.
+        for action in actions.ACTIONS.values():
+            assert action.kind in {"tap", "chord", "scroll", "click"}, action.id
 
     def test_action_ids_are_plain_identifiers(self) -> None:
         # Ids reach a dict lookup only, but keeping them to a boring shape
