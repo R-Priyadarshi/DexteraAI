@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" fill="#0a0a0b"/>
+  <g stroke="#ffb627" stroke-width="14" stroke-linecap="round" fill="none">
+    <!-- palm -->
+    <path d="M256 430 L176 330 M256 430 L226 300 M256 430 L266 292 M256 430 L306 300 M256 430 L346 330"/>
+    <!-- knuckle span -->
+    <path d="M176 330 L226 300 L266 292 L306 300 L346 330"/>
+    <!-- fingers -->
+    <path d="M226 300 L214 196 L208 138"/>
+    <path d="M266 292 L262 178 L260 112"/>
+    <path d="M306 300 L318 186 L326 128"/>
+    <path d="M346 330 L372 246 L386 200"/>
+    <path d="M176 330 L128 268 L100 232"/>
+  </g>
+  <g fill="#ffb627">
+    <circle cx="256" cy="430" r="13"/>
+    <circle cx="208" cy="138" r="11"/>
+    <circle cx="260" cy="112" r="11"/>
+    <circle cx="326" cy="128" r="11"/>
+    <circle cx="386" cy="200" r="11"/>
+    <circle cx="100" cy="232" r="11"/>
+  </g>
+</svg>
