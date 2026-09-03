@@ -418,11 +418,12 @@ export default function Console() {
 
                             const fusedMatch = intentRefinery.process(result, voiceIntentRef.current);
                             if (fusedMatch) {
+                                // `process` already executed the action and
+                                // pulsed. Doing it again here fired every fused
+                                // action twice — which locked the screen twice
+                                // for the emergency halt, and would silently
+                                // cancel itself for anything that toggles.
                                 setLastFusedAction(fusedMatch);
-                                fusedMatch.execute();
-                                hapticEngine.pulse(
-                                    fusedMatch.feedbackType === "error" ? "error" : "light"
-                                );
                                 // Record it, so the log reflects real dispatches.
                                 setRecentActions((log) =>
                                     [

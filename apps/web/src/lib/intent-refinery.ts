@@ -46,6 +46,9 @@ export class IntentRefinery {
     private voiceBuffer: TemporalIntent[] = [];
     private gestureBuffer: TemporalGesture[] = [];
     
+    /** Last intent the caller reported, so a held one is not re-buffered. */
+    private lastVoiceSeen: VoiceIntent | null = null;
+
     private readonly FUSION_WINDOW_MS = 2000;
     private readonly COOLDOWN_MS = 1500;
     private lastTriggerTime = 0;
@@ -111,6 +114,22 @@ export class IntentRefinery {
     }
 
     /**
+     * Clear buffers and cooldown, and restore the default fusions.
+     *
+     * Buffers describe one continuous session. Carrying them across a camera
+     * restart means a word spoken before the restart can still fire something
+     * after it.
+     */
+    public reset(): void {
+        this.voiceBuffer = [];
+        this.gestureBuffer = [];
+        this.lastVoiceSeen = null;
+        this.lastTriggerTime = 0;
+        this.fusedActions = [];
+        this.initializeDefaults();
+    }
+
+    /**
      * Probabilistically fuses gestures and voice intents within a temporal window.
      */
     public process(gesture: GestureResult, voice: VoiceIntent | null): FusedAction | null {
@@ -120,9 +139,22 @@ export class IntentRefinery {
         if (now - this.lastTriggerTime < this.COOLDOWN_MS) return null;
 
         // 2. Update Buffers
-        if (voice) {
+        //
+        // Voice is edge-triggered, the same way gestures are taken on `onset`
+        // below. The caller holds a recognised intent for about two seconds so
+        // it can be displayed, and `process` runs every frame, so pushing on
+        // every call buffered ~60 copies of one spoken word: one was consumed
+        // on the match and the rest stayed, ready to fire again the moment the
+        // cooldown lapsed.
+        //
+        // Deduplicating against the buffer is not enough, which a test caught:
+        // a match empties the buffer, so the very next frame re-adds the same
+        // utterance and the window slides forward for as long as the caller
+        // keeps reporting it. Only a transition counts as a new utterance.
+        if (voice && voice !== this.lastVoiceSeen) {
             this.voiceBuffer.push({ intent: voice, timestamp: now });
         }
+        this.lastVoiceSeen = voice;
         // Onsets only. Buffering every frame of a held pose would fill the
         // window with 60 copies of the same gesture and make the "consume both
         // triggers" step below meaningless.
@@ -142,19 +174,21 @@ export class IntentRefinery {
             const gestureMatch = this.gestureBuffer.find(g => g.gestureName === action.gestureName);
 
             if (voiceMatch && gestureMatch) {
-                // Determine which came first (for potentially different logic, currently just fuse)
-                const timeDiff = Math.abs(voiceMatch.timestamp - gestureMatch.timestamp);
-                
-                if (timeDiff < this.FUSION_WINDOW_MS) {
-                    // Consume both triggers to prevent double-firing
-                    this.voiceBuffer = this.voiceBuffer.filter(v => v !== voiceMatch);
-                    this.gestureBuffer = this.gestureBuffer.filter(g => g !== gestureMatch);
-                    
-                    this.lastTriggerTime = now;
-                    hapticEngine.pulse(action.feedbackType);
-                    action.execute();
-                    return action;
-                }
+                // No separation check here: the purge above already dropped
+                // anything older than FUSION_WINDOW_MS, so both survivors are
+                // within that of now and therefore within it of each other.
+                // The explicit `timeDiff < FUSION_WINDOW_MS` that used to sit
+                // here could not fail, which made it read as a safety
+                // condition while enforcing nothing.
+
+                // Consume both triggers so neither can fire a second action.
+                this.voiceBuffer = this.voiceBuffer.filter(v => v !== voiceMatch);
+                this.gestureBuffer = this.gestureBuffer.filter(g => g !== gestureMatch);
+
+                this.lastTriggerTime = now;
+                hapticEngine.pulse(action.feedbackType);
+                action.execute();
+                return action;
             }
         }
 

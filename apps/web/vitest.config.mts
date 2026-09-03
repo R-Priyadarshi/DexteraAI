@@ -1,6 +1,16 @@
+import { fileURLToPath } from "node:url";
+
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  resolve: {
+    // tsconfig maps "@/*" to "./src/*" and Next honours it, but vitest does
+    // not read tsconfig paths, so a test importing "@/lib/x" failed to resolve
+    // while the same import compiled fine in the app.
+    alias: {
+      "@": fileURLToPath(new URL("./src", import.meta.url)),
+    },
+  },
   // Vite 8 transforms with oxc rather than esbuild, and ignores `esbuild`
   // options entirely if both are present.
   oxc: {
