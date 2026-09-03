@@ -11,6 +11,7 @@
 import * as ort from "onnxruntime-web";
 import { gestureStore } from "./gesture-store";
 import { type GesturePhase, type SegmenterConfig } from "./gesture-segmenter";
+import { buildPrototype, matchPrototypes, type Prototype } from "./few-shot";
 import { HandTrack, type Handedness, type HandResult } from "./hand-track";
 
 export type { HandResult, Handedness } from "./hand-track";
@@ -123,13 +124,24 @@ const FEATURE_DIM = 86;
  */
 export const CUSTOM_GESTURE_ID = 999;
 
-/** Minimum k-NN confidence for a taught gesture to be reported. */
-const CUSTOM_MATCH_THRESHOLD = 0.88;
+/** Minimum prototype-match confidence for a taught gesture to be reported. */
+const CUSTOM_MATCH_THRESHOLD = 0.8;
 
 /** Per-finger curl ratios occupy indices 78-82 of the 86-dim feature vector. */
 const CURL_FEATURE_START = 78;
 const CURL_FEATURE_END = 82;
 const CURL_WEIGHT = 2.0;
+
+/**
+ * Weight on derived features (angles, distances, curls) over raw coordinates.
+ *
+ * Square root of two, because the previous matcher applied a factor of 2 to
+ * *squared* differences inside the distance computation. Folding the weighting
+ * into the vectors themselves means it must be applied to the values, and
+ * sqrt(2) squared is 2 — so the metric is unchanged while prototypes can now
+ * be built in the same space they are matched in.
+ */
+const DERIVED_FEATURE_WEIGHT = Math.SQRT2;
 const DEFAULT_SEQUENCE_LENGTH = 30;
 
 /** Shape of the labels.json emitted next to an exported gesture.onnx. */
@@ -751,66 +763,59 @@ export class GestureEngine {
   }
 
   /**
-   * Nearest-neighbour match against user-taught gestures.
+   * Match against user-taught gestures using class prototypes.
    *
-   * Stored samples are weighted the same way as the query, then compared by
-   * weighted Euclidean distance, with the nearest sample deciding the label.
-   * With a few dozen samples per gesture this is cheap and needs no training,
-   * which is what makes teaching a gesture instant.
+   * Each taught gesture is reduced to a mean vector plus the spread of its own
+   * samples, and a query is scored in units of that spread. That makes scores
+   * comparable across gestures with genuinely different tightness — a fist
+   * whose samples cluster hard and a wave whose samples spread wide can no
+   * longer share one absolute distance threshold, which previously
+   * over-rejected the first and over-accepted the second.
    */
   private matchCustomGesture(
     currentLandmarks: Landmark[]
   ): { name: string; confidence: number } | null {
-    const customGestures = gestureStore.getGestures();
-    if (customGestures.length === 0) return null;
+    const prototypes = this.prototypes();
+    if (prototypes.length === 0) return null;
 
     const query = this.weightFeatures(extractFeatures(currentLandmarks));
+    const match = matchPrototypes(query, prototypes);
 
-    let bestMatch: { name: string; confidence: number } | null = null;
-    let minDistance = Infinity;
-
-    for (const gesture of customGestures) {
-      for (const sample of this.storedFeatures(gesture.id, gesture.samples)) {
-        const distance = this.weightedEuclideanDistance(query, sample);
-        if (distance < minDistance) {
-          minDistance = distance;
-          bestMatch = {
-            name: gesture.name,
-            // Distance-to-confidence is a heuristic mapping, not a calibrated
-            // probability. It is deliberately capped below 1 so a k-NN match
-            // can never present itself as more certain than the trained model.
-            confidence: Math.max(0, Math.min(0.99, 1 - distance / 4)),
-          };
-        }
-      }
-    }
-
-    return bestMatch && bestMatch.confidence > CUSTOM_MATCH_THRESHOLD
-      ? bestMatch
+    return match && match.confidence > CUSTOM_MATCH_THRESHOLD
+      ? { name: match.name, confidence: match.confidence }
       : null;
   }
 
   /**
-   * Weighted feature vectors for a stored gesture, computed once and reused.
+   * Prototypes for the taught gestures, rebuilt only when the store changes.
    *
-   * Recomputing these per frame meant a user with ten taught gestures paid for
-   * ~400 feature extractions every frame, entirely to re-derive values that
-   * never change. The cache is keyed by gesture id and sample count, so editing
-   * or re-recording a gesture invalidates it.
+   * Deriving these per frame meant a user with ten taught gestures paid for
+   * ~400 feature extractions every frame to recompute values that never
+   * change. The signature covers gesture ids and sample counts, so teaching,
+   * deleting or re-recording a gesture invalidates the cache.
    */
-  private storedFeatures(id: string, samples: Landmark[][]): Float32Array[] {
-    const key = `${id}:${samples.length}`;
-    const cached = this.customFeatureCache.get(key);
-    if (cached) return cached;
+  private prototypes(): Prototype[] {
+    const gestures = gestureStore.getGestures();
+    const signature = gestures.map((g) => `${g.id}:${g.samples.length}`).join("|");
 
-    const computed = samples.map((sample) =>
-      this.weightFeatures(extractFeatures(sample))
-    );
-    this.customFeatureCache.set(key, computed);
-    return computed;
+    if (signature === this.prototypeSignature) return this.prototypeCache;
+
+    this.prototypeCache = gestures
+      .map((g) =>
+        buildPrototype(
+          g.id,
+          g.name,
+          g.samples.map((sample) => this.weightFeatures(extractFeatures(sample)))
+        )
+      )
+      .filter((p): p is Prototype => p !== null);
+    this.prototypeSignature = signature;
+
+    return this.prototypeCache;
   }
 
-  private customFeatureCache = new Map<string, Float32Array[]>();
+  private prototypeCache: Prototype[] = [];
+  private prototypeSignature = "";
 
   /**
    * Emphasise the per-finger curl ratios before comparing.
@@ -822,23 +827,17 @@ export class GestureEngine {
    */
   private weightFeatures(features: Float32Array): Float32Array {
     const out = new Float32Array(features.length);
-    out.set(features);
+    // Derived features (angles, distances, curls) discriminate shape better
+    // than the raw coordinates that precede them, so they count for more. The
+    // weighting is folded in here rather than applied at comparison time, so
+    // prototypes are built in the same space they are matched in.
+    for (let i = 0; i < features.length; i++) {
+      out[i] = i >= 63 ? features[i] * DERIVED_FEATURE_WEIGHT : features[i];
+    }
     for (let i = CURL_FEATURE_START; i <= CURL_FEATURE_END; i++) {
       out[i] *= CURL_WEIGHT;
     }
     return out;
-  }
-
-  private weightedEuclideanDistance(a: Float32Array, b: Float32Array): number {
-    let sum = 0;
-    for (let i = 0; i < a.length; i++) {
-      const diff = a[i] - b[i];
-      // Derived features (angles, distances, curls) discriminate shape better
-      // than the raw coordinates that precede them, so they count for more.
-      const weight = i >= 63 ? 2.0 : 1.0;
-      sum += diff * diff * weight;
-    }
-    return Math.sqrt(sum);
   }
 
   /**
