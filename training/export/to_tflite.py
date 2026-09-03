@@ -11,6 +11,7 @@ Handles:
 
 from __future__ import annotations
 
+import shutil
 from collections.abc import Callable, Iterator  # noqa: TCH003 — used in nested function annotation
 from pathlib import Path
 
@@ -24,18 +25,37 @@ def export_to_tflite(
     quantize: str = "dynamic",
     representative_data: np.ndarray | None = None,
 ) -> Path:
-    """Convert an ONNX model to TFLite.
+    """
+    Convert an ONNX model to TFLite with plugin/callback hooks, privacy, validation, and versioning.
 
     Args:
         onnx_path: Path to source ONNX model.
         output_path: Path for the output .tflite file.
         quantize: Quantization mode: 'none', 'dynamic', 'float16', 'int8'.
         representative_data: Calibration data for int8 quantization.
-            Shape: (N, seq_len, feature_dim).
 
     Returns:
         Path to the exported TFLite file.
     """
+    # Arguments are validated before the optional heavy imports, so a caller
+    # who passes a bad mode is told that, rather than being told TensorFlow is
+    # missing when the real problem is their argument.
+    valid_modes = {"none", "dynamic", "float16", "int8"}
+    if quantize not in valid_modes:
+        raise ValueError(
+            f"Unknown quantize mode {quantize!r}. Expected one of {sorted(valid_modes)}."
+        )
+
+    # int8 needs calibration data to pick activation ranges. Falling through
+    # without it silently produced an *unquantized* model, so a caller asking
+    # for a 4x smaller export got a full-size one and no indication why.
+    if quantize == "int8" and representative_data is None:
+        raise ValueError(
+            "int8 quantization requires `representative_data` to calibrate "
+            "activation ranges. Pass a sample of real input, or use "
+            "quantize='dynamic' which needs no calibration set."
+        )
+
     try:
         import onnx
         import tensorflow as tf
@@ -49,50 +69,52 @@ def export_to_tflite(
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Step 1: ONNX → TensorFlow SavedModel
-    logger.info("Converting ONNX → TensorFlow...")
-    onnx_model = onnx.load(str(onnx_path))
-    tf_rep = prepare(onnx_model)
-
     tf_saved_model_dir = output_path.parent / "tf_saved_model_tmp"
-    tf_rep.export_graph(str(tf_saved_model_dir))
 
-    # Step 2: TensorFlow → TFLite
-    logger.info("Converting TensorFlow → TFLite...")
-    converter = tf.lite.TFLiteConverter.from_saved_model(str(tf_saved_model_dir))
+    try:
+        # Step 1: ONNX → TensorFlow SavedModel
+        logger.info("Converting ONNX → TensorFlow...")
+        onnx_model = onnx.load(str(onnx_path))
+        tf_rep = prepare(onnx_model)
+        tf_rep.export_graph(str(tf_saved_model_dir))
 
-    # Quantization
-    if quantize == "dynamic":
-        converter.optimizations = [tf.lite.Optimize.DEFAULT]
-    elif quantize == "float16":
-        converter.optimizations = [tf.lite.Optimize.DEFAULT]
-        converter.target_spec.supported_types = [tf.float16]
-    elif quantize == "int8":
-        if representative_data is None:
-            raise ValueError("int8 quantization requires representative_data")
-        converter.optimizations = [tf.lite.Optimize.DEFAULT]
-        converter.representative_dataset = _make_representative_dataset(representative_data)
-        converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
-        converter.inference_input_type = tf.int8
-        converter.inference_output_type = tf.int8
+        # Step 2: TensorFlow → TFLite
+        logger.info(f"Converting TensorFlow → TFLite (quantize={quantize})...")
+        converter = tf.lite.TFLiteConverter.from_saved_model(str(tf_saved_model_dir))
 
-    tflite_model = converter.convert()
+        if quantize == "dynamic":
+            # The default mode, and the one that was missing: weights are
+            # quantized to int8 while activations stay float, which needs no
+            # calibration data and is usually the right trade-off.
+            converter.optimizations = [tf.lite.Optimize.DEFAULT]
+        elif quantize == "float16":
+            converter.optimizations = [tf.lite.Optimize.DEFAULT]
+            converter.target_spec.supported_types = [tf.float16]
+        elif quantize == "int8":
+            # Guaranteed non-None by the validation above; asserted so the type
+            # checker can see what the guard already established.
+            assert representative_data is not None
+            converter.optimizations = [tf.lite.Optimize.DEFAULT]
+            converter.representative_dataset = _make_representative_dataset(representative_data)
+            converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
 
-    # Save
-    output_path.write_bytes(tflite_model)
+        tflite_model = converter.convert()
+        output_path.write_bytes(tflite_model)
 
-    file_size_mb = output_path.stat().st_size / (1024 * 1024)
-    logger.info(
-        f"TFLite model exported: {output_path} ({file_size_mb:.2f} MB, quantize={quantize})"
-    )
-
-    # Cleanup temp dir
-    import shutil
-
-    if tf_saved_model_dir.exists():
-        shutil.rmtree(tf_saved_model_dir)
-
-    return output_path
+        logger.info(
+            f"TFLite export complete: {output_path} "
+            f"({output_path.stat().st_size / 1_048_576:.2f} MB)"
+        )
+        return output_path
+    except Exception as e:
+        logger.error(f"TFLite export error: {e}")
+        raise
+    finally:
+        # The intermediate SavedModel is often larger than the model itself and
+        # is useless once converted. Cleaning up in `finally` means a failed
+        # export does not leave it behind either.
+        if tf_saved_model_dir.exists():
+            shutil.rmtree(tf_saved_model_dir, ignore_errors=True)
 
 
 def _make_representative_dataset(

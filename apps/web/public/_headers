@@ -1,0 +1,19 @@
+# Cross-origin isolation, required for SharedArrayBuffer and therefore for
+# ONNX Runtime Web's multithreaded WASM backend.
+#
+# `next.config.mjs` declares these too, but Next drops custom headers under
+# `output: "export"` — a static build has no server to apply them. This file is
+# read by Netlify and Cloudflare Pages; other hosts need the equivalent in their
+# own config (see docs/DEPLOYMENT-HEADERS.md).
+#
+# Without them the app still works, just single-threaded and slower.
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+
+# The service worker must not be served from cache, or a deploy cannot ship a
+# new one and clients stay pinned to the old asset manifest indefinitely.
+/sw.js
+  Cache-Control: no-cache

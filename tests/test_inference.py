@@ -59,9 +59,10 @@ class TestONNXInferenceRuntime:
             assert "input" in rt.input_names
             assert "logits" in rt.output_names
 
+            rng = np.random.default_rng(seed=42)
             result = rt.predict(
                 {
-                    "input": np.random.randn(1, 30, 86).astype(np.float32),
+                    "input": rng.standard_normal((1, 30, 86), dtype=np.float32),
                     "mask": np.zeros((1, 30), dtype=bool),
                 }
             )

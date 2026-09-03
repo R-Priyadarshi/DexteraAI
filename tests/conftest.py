@@ -13,6 +13,25 @@ if TYPE_CHECKING:
     import torch
 
 
+def _mediapipe_bundle_available() -> bool:
+    """True when the MediaPipe hand_landmarker.task bundle can be found."""
+    try:
+        from core.vision.detector import resolve_hand_landmarker_path
+
+        resolve_hand_landmarker_path()
+    except Exception:
+        return False
+    return True
+
+
+HAS_MEDIAPIPE_BUNDLE = _mediapipe_bundle_available()
+
+requires_mediapipe_bundle = pytest.mark.skipif(
+    not HAS_MEDIAPIPE_BUNDLE,
+    reason="MediaPipe hand_landmarker.task not found — run `make fetch-models`",
+)
+
+
 @pytest.fixture
 def random_landmarks() -> HandLandmarks:
     """Generate random hand landmarks."""

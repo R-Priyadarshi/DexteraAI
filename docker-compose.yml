@@ -15,16 +15,30 @@ services:
       - APP_ENV=production
       - DEBUG=false
       - LOG_LEVEL=INFO
+      - LOG_FORMAT=%(asctime)s %(levelname)s %(message)s
     volumes:
       - ./models:/app/models:ro
       - ./data:/app/data:ro
       - dextera-logs:/app/logs
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      test: ["CMD", "/app/healthcheck.sh"]
       interval: 30s
       timeout: 5s
       retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   dextera-logs:

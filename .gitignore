@@ -40,7 +40,14 @@ Thumbs.db
 checkpoints/
 models/*.onnx
 models/*.tflite
+models/**/*.onnx
+models/**/*.onnx.data
+*.onnx.data
+# fetched via `make fetch-models`
+models/mediapipe/
 !models/.gitkeep
+# small, describes the bundle's vocabulary
+!models/**/labels.json
 
 # ── MLflow ──
 mlruns/
@@ -78,3 +85,17 @@ apps/mobile/build/
 
 # ── Tauri ──
 apps/desktop/src-tauri/target/
+
+# ── Web runtime assets (restored by `npm run sync-runtime`) ──
+# Large WASM binaries that ship inside npm packages. Keeping them in git would
+# add ~170MB of history for files that `npm install` already provides.
+apps/web/public/onnx/*.wasm
+apps/web/public/onnx/*.mjs
+apps/web/public/onnx/mediapipe/
+# Trained model bundles are build artifacts; only their label manifest is tracked.
+apps/web/public/onnx/**/*.onnx
+apps/web/public/onnx/**/*.onnx.data
+!apps/web/public/onnx/**/labels.json
+
+# TypeScript incremental build cache
+*.tsbuildinfo

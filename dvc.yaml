@@ -1,62 +1,117 @@
+# Reproduction pipeline for the shipped model bundles.
+#
+# This mirrors how the models in `models/` were actually produced, which the
+# previous version did not: it trained on `data/sequences/hagrid`, a partial
+# first-pass extraction that has no metadata.json and cannot be loaded. The
+# shipped 98.1% model was trained on the *merge* of two extraction passes.
+#
+# HaGRID is extracted in two passes because a single streamed pass over
+# class-ordered parquet shards exhausts the earlier classes long before the
+# later ones; the tail pass fills in the seven classes the first pass
+# under-covered. `rock` and `stop` are covered by both, so they carry roughly
+# twice the samples of the other classes — the trainer's class weighting
+# absorbs that.
+#
+# Note: `dvc repro` re-runs extraction from raw imagery, which is not kept in
+# the repo (12 GB) and must be re-downloaded first. The extracted landmarks
+# under `data/sequences/` are the durable artifact.
+
 stages:
-  # NOTE: extract_landmarks and prepare_sequences stages require
-  # implementing the corresponding scripts. Uncomment when ready.
-  #
-  # extract_landmarks:
-  #   cmd: python -m training.datasets.extract_landmarks
-  #     --input data/raw/videos
-  #     --output data/processed/landmarks
-  #   deps:
-  #     - data/raw/videos
-  #     - training/datasets/extract_landmarks.py
-  #   outs:
-  #     - data/processed/landmarks
-  #
-  # prepare_sequences:
-  #   cmd: python -m training.datasets.prepare_sequences
-  #     --input data/processed/landmarks
-  #     --output data/sequences
-  #     --seq-len 30
-  #   deps:
-  #     - data/processed/landmarks
-  #     - training/datasets/prepare_sequences.py
-  #   outs:
-  #     - data/sequences
+  extract_landmarks:
+    cmd: python -m training.datasets.extract_landmarks
+      --parquet-dir data/raw/hagrid_parquet
+      --output data/sequences/hagrid
+      --max-per-class 4000
+    deps:
+      - data/raw/hagrid_parquet
+      - training/datasets/extract_landmarks.py
+      - core/vision/detector.py
+    outs:
+      - data/sequences/hagrid
+
+  extract_landmarks_tail:
+    cmd: python -m training.datasets.extract_landmarks
+      --parquet-dir data/raw/hagrid_tail
+      --output data/sequences/hagrid_tail
+      --max-per-class 4000
+    deps:
+      - data/raw/hagrid_tail
+      - training/datasets/extract_landmarks.py
+      - core/vision/detector.py
+    outs:
+      - data/sequences/hagrid_tail
+
+  merge_landmarks:
+    cmd: python -m training.datasets.merge_datasets
+      --inputs data/sequences/hagrid data/sequences/hagrid_tail
+      --output data/sequences/hagrid_full
+    deps:
+      - data/sequences/hagrid
+      - data/sequences/hagrid_tail
+      - training/datasets/merge_datasets.py
+    outs:
+      - data/sequences/hagrid_full
 
   train:
     cmd: python dextera.py train
-      --dataset data/sequences
+      --dataset data/sequences/hagrid_full
       --epochs 100
       --device auto
+      --calibrate
+      --checkpoint-dir checkpoints/hagrid
+      --export models/hagrid
     deps:
-      - data/sequences
+      - data/sequences/hagrid_full
+      - core/temporal/model.py
+      - training/trainers/train_gesture.py
+      - training/evaluation/calibrate_confidence.py
+    outs:
+      - checkpoints/hagrid/best.pt
+      - models/hagrid/gesture.onnx
+      - models/hagrid/labels.json
+    metrics:
+      - reports/eval_hagrid_full.json:
+          cache: false
+
+  # ── Sign-language track ───────────────────────────────────
+  extract_asl:
+    cmd: python -m training.datasets.extract_landmarks
+      --parquet-dir data/raw/asl_parquet
+      --output data/sequences/asl_alphabet
+    deps:
+      - data/raw/asl_parquet
+      - training/datasets/extract_landmarks.py
+      - core/vision/detector.py
+    outs:
+      - data/sequences/asl_alphabet
+
+  train_asl:
+    cmd: python dextera.py train
+      --dataset data/sequences/asl_alphabet
+      --epochs 80
+      --device auto
+      --calibrate
+      --checkpoint-dir checkpoints/asl
+      --export models/asl_alphabet
+    deps:
+      - data/sequences/asl_alphabet
       - core/temporal/model.py
       - training/trainers/train_gesture.py
     outs:
-      - checkpoints/best.pt
+      - checkpoints/asl/best.pt
+      - models/asl_alphabet/gesture.onnx
+      - models/asl_alphabet/labels.json
     metrics:
-      - reports/train_metrics.json:
+      - reports/eval_asl_alphabet.json:
           cache: false
 
-  evaluate:
-    cmd: python dextera.py eval
-      --checkpoint checkpoints/best.pt
-      --dataset data/sequences
-      --output reports/eval.json
+  benchmark:
+    cmd: python dextera.py benchmark
+      --checkpoint models/hagrid/gesture.onnx
+      --onnx
+      --iterations 1000
     deps:
-      - checkpoints/best.pt
-      - data/sequences
-    metrics:
-      - reports/eval.json:
-          cache: false
+      - models/hagrid/gesture.onnx
 
-  export_onnx:
-    cmd: python dextera.py export
-      --checkpoint checkpoints/best.pt
-      --format onnx
-      --quantize
-    deps:
-      - checkpoints/best.pt
-    outs:
-      - models/gesture.onnx
-      - models/gesture_quant.onnx
+# DVC remote (optional, for sharing artifacts):
+#   dvc remote add -d cloud s3://dextera-ai-global-artifacts

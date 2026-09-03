@@ -94,3 +94,129 @@ Real-time gesture prediction over WebSocket.
 | `python dextera.py benchmark` | Latency benchmark |
 | `python dextera.py serve` | Start FastAPI server |
 | `python dextera.py info` | Show system info |
+
+---
+
+## Core Modules
+
+### Training
+- `GestureTrainer`: Production-grade training loop with distributed, plugin/callback, MLflow tracking, Optuna tuning.
+- `TrainConfig`: Hyperparameters, reproducibility, checkpointing.
+- `TrainResult`: Metrics, history, artifact saving.
+
+### Inference
+- `GesturePipeline`: Modular, extensible pipeline for real-time gesture recognition.
+- `ONNXInferenceRuntime`: Cross-platform ONNX inference, privacy, batch/streaming, plugin/callbacks.
+
+### Calibration
+- `UserCalibrator`: Per-user calibration, plugin/callbacks, privacy, metrics.
+- `CalibrationProfile`: User-specific reference data.
+
+### Export
+- `export_to_onnx`: ONNX export, plugin/callbacks, privacy, validation, versioning.
+- `export_to_tflite`: TFLite export, plugin/callbacks, privacy, quantization, validation.
+
+### Integration
+- Web, mobile, desktop, edge: API, CLI, SDK, plugin marketplace.
+
+---
+
+## Privacy & Security
+- All inference can run fully on-device.
+- No user data leaves device unless explicitly enabled.
+- Calibration and export support privacy-preserving modes.
+- Enterprise-grade logging, error handling, and metrics.
+
+---
+
+## Developer Onboarding
+- See `README.md` for quickstart, CLI, and integration.
+- All modules are extensible via plugin/callback architecture.
+- MLflow, DVC, GitHub Actions, benchmarks for MLOps.
+- API and CLI are documented and auto-generated.
+
+---
+
+## Performance Targets
+- Real-time inference (<20ms per frame on modern devices)
+- Distributed training, robust experiment tracking
+- Modular, scalable, privacy-preserving architecture
+
+---
+
+## Plugin & Callback API
+
+DexteraAI supports a plugin/callback architecture for extensibility:
+
+### Callback Hooks
+- `on_train_start(trainer)`
+- `on_epoch_start(epoch, trainer)`
+- `on_epoch_end(epoch, metrics, trainer)`
+- `on_train_end(trainer, result)`
+
+### Custom Plugin Example
+```python
+class MyPlugin(Callback):
+    def on_epoch_end(self, epoch, metrics, trainer):
+        print(f"Epoch {epoch} finished. Metrics: {metrics}")
+```
+
+### Register Plugins
+```python
+trainer = GestureTrainer(model, dataset, config, callbacks=[MyPlugin()])
+```
+
+---
+
+## Global Integration Examples
+
+- **Web**: Use ONNX.js or WebGPU for browser inference
+- **Mobile**: TFLite integration for Android/iOS
+- **Desktop**: ONNX runtime, plugin/callbacks
+- **Edge/Robotics**: TFLite/ONNX, real-time, low-power
+
+See `/apps/web`, `/apps/mobile`, `/apps/desktop` for starter templates.
+
+---
+
+## Accessibility & Internationalization
+
+- Motor disability support, sign language, customizable gestures
+- Multi-language UI, locale-aware onboarding
+- Global privacy compliance (GDPR, CCPA, etc.)
+
+---
+
+## Not Currently Served
+
+Earlier drafts of this document listed endpoints for plugins, retraining, cloud/edge sync,
+multimodal ingest, notifications, custom gestures, integrations, analytics, and RBAC.
+
+**None of those are mounted, and the sketches have now been deleted.** The application
+serves only the three endpoints above. Several of the sketches contained security defects
+(path traversal, SSRF) and none had authentication, so leaving them in the tree was a
+liability even unreachable. `backend/experimental/README.md` records what they were, what
+was wrong with each, and how to recover them from git history.
+
+Two of them have since been answered without a server: custom-gesture sync is handled by
+gesture packs (a JSON export that imports on another machine), and plugins are TypeScript
+objects registered at startup rather than records in a server registry.
+
+The product runs inference on-device; the API server is an optional convenience for demos
+and integration tests, not the primary delivery path.
+
+---
+
+## Model Bundles
+
+A trained model ships as a directory containing the ONNX graph and its label set:
+
+```
+models/<name>/
+├── gesture.onnx     # exported graph, inputs: input (1, seq_len, 86), mask (1, seq_len)
+└── labels.json      # {"labels": [...], "seq_len": 30, "feature_dim": 86, ...}
+```
+
+`GesturePipeline` reads `labels.json` from the directory next to the checkpoint, so the
+label set travels with the model instead of being hardcoded in the Python and TypeScript
+clients separately.

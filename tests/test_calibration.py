@@ -74,9 +74,9 @@ class TestUserCalibrator:
         sim = cal.compute_similarity("fist", hand)
         assert sim > 0.9
 
-        # Unknown gesture should return 0
-        sim_unknown = cal.compute_similarity("unknown_gesture", hand)
-        assert sim_unknown == 0.0
+        # Unknown gesture should raise ValueError
+        with pytest.raises(ValueError, match="Gesture 'unknown_gesture' not calibrated"):
+            cal.compute_similarity("unknown_gesture", hand)
 
     def test_save_and_load(self) -> None:
         cal = UserCalibrator(user_id="persist_test")

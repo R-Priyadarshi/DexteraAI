@@ -19,6 +19,13 @@ dependencies = [
     "torchvision>=0.18.0",
     "onnx>=1.16.0",
     "onnxruntime>=1.18.0",
+    # `torch.onnx.export` routes through the dynamo exporter by default on
+    # current torch, and that path imports onnxscript. torch does not depend on
+    # it, so `dextera.py export` — a documented command — raised
+    # ModuleNotFoundError on any clean install. It was present here only
+    # because something else had pulled it in transitively, which is why the
+    # models in this repo could be built locally and not from a fresh checkout.
+    "onnxscript>=0.1.0",
     "numpy>=1.26.0",
     "opencv-python-headless>=4.10.0",
     "scipy>=1.13.0",
@@ -37,16 +44,41 @@ dev = [
     "hypothesis>=6.100.0",
     "ruff>=0.4.0",
     "mypy>=1.10.0",
+    # CI's lint job runs bandit. It used to be listed in the workflow but
+    # declared nowhere, so the step failed on a missing command rather than on
+    # any finding — the scan had never actually run.
+    "bandit>=1.7.0",
     "pre-commit>=3.7.0",
+    # The bridge's own dependencies, so CI actually exercises it. Both are
+    # small and pure Python. `pynput` cannot inject input on a headless runner,
+    # but `bridge.actions` defers acquiring a controller until an action is
+    # executed, so the registry, the token handling and the origin policy are
+    # all testable without a display.
+    "pynput>=1.7.6",
+    "websockets>=12.0",
+]
+bridge = [
+    # Desktop control. Optional because the daemon is opt-in and injecting
+    # input is not something a default install should be able to do.
+    "pynput>=1.7.6",
+    "websockets>=12.0",
 ]
 training = [
+    "datasets>=2.19.0",
     "mlflow>=2.13.0",
+    # Imported inside `GestureTrainer.tune()`. Lazy, so it never broke a test
+    # run, but `dextera.py` exposes the tuner and it was declared nowhere.
+    "optuna>=3.6.0",
     "dvc>=3.50.0",
     "tensorboard>=2.16.0",
     "albumentations>=1.4.0",
 ]
 api = [
     "fastapi>=0.111.0",
+    # `backend/apps/api/middleware.py` imports starlette directly rather than
+    # re-exporting through fastapi, so it is a dependency of ours in its own
+    # right, not merely one of fastapi's.
+    "starlette>=0.37.0",
     "uvicorn[standard]>=0.29.0",
     "pydantic-settings>=2.3.0",
     "orjson>=3.10.0",
@@ -56,6 +88,10 @@ api = [
 tflite = [
     "tensorflow>=2.16.0",
     "ai-edge-litert>=1.0.0",
+    # `training/export/to_tflite.py` also needs `onnx-tf`, which is not listed
+    # here on purpose: it is unmaintained and does not install cleanly against
+    # current TensorFlow, so pinning it would break this whole extra. The
+    # export path raises with the exact install command instead.
 ]
 
 [project.scripts]
@@ -77,15 +113,56 @@ ignore = ["ANN401"]
 
 [tool.ruff.lint.per-file-ignores]
 "core/temporal/*.py" = ["N812"]  # Allow `import torch.nn.functional as F` (PyTorch convention)
+"training/evaluation/*.py" = ["N812"]  # same PyTorch convention
 "tests/*.py" = ["ANN"]          # Don't require type annotations in tests
 "backend/apps/api/routes.py" = ["B008"]  # FastAPI Depends/File in defaults is idiomatic
 
 [tool.mypy]
 python_version = "3.11"
+# backend/experimental holds unmounted sketches that are not part of the product.
+# See backend/experimental/README.md.
+exclude = ["backend/experimental/"]
 strict = true
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = [
+    "mediapipe",
+    "mediapipe.*",
+    "onnxruntime",
+    "onnxruntime.*",
+    "cv2",
+    "cv2.*",
+    "mlflow.*",
+    "optuna.*",
+    "datasets.*",
+    "sklearn.*",
+    "tqdm",
+    "tqdm.*",
+    "tensorflow",
+    "tensorflow.*",
+    "onnx_tf",
+    "onnx_tf.*",
+    "torch.amp",
+    "onnx_tf.backend",
+    # The bridge's input backend. No stubs are published, and it is imported
+    # lazily inside a function, so mypy sees it only at that call site.
+    "pynput",
+    "pynput.*",
+]
+ignore_missing_imports = true
+disable_error_code = ["import-untyped", "attr-defined"]
+
+[[tool.mypy.overrides]]
+module = ["training.trainers.*"]
+disable_error_code = ["attr-defined"]
+
+# TFLite export depends on the optional [tflite] extra, absent in most installs.
+[[tool.mypy.overrides]]
+module = ["training.export.to_tflite"]
+disable_error_code = ["import-untyped", "import-not-found"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

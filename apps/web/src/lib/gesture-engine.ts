@@ -9,6 +9,16 @@
  */
 
 import * as ort from "onnxruntime-web";
+import { gestureStore } from "./gesture-store";
+import { type GesturePhase, type SegmenterConfig } from "./gesture-segmenter";
+import { normalizeLandmarks } from "./landmark-normalizer";
+import { buildPrototype, matchPrototypes, type Prototype } from "./few-shot";
+import { HandTrack, type Handedness, type HandResult } from "./hand-track";
+
+export type { HandResult, Handedness } from "./hand-track";
+
+// Global Hands from /onnx/mediapipe/hands.js loaded in layout.tsx
+declare const Hands: any;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -20,6 +30,16 @@ export interface Landmark {
   z: number;
 }
 
+/** Motion-derived intent inferred alongside the classified gesture. */
+export type SpatialIntent =
+  | "swipe_left"
+  | "swipe_right"
+  | "hyper_left"
+  | "hyper_right"
+  | "pinch_open"
+  | "pinch_close"
+  | "none";
+
 export interface GestureResult {
   gestureName: string;
   gestureId: number;
@@ -27,9 +47,74 @@ export interface GestureResult {
   landmarks: Landmark[] | null;
   handedness: "left" | "right" | "unknown";
   inferenceTimeMs: number;
+  velocity: { x: number; y: number; z: number };
+  spatialIntent: SpatialIntent;
+  /**
+   * True when the calibrated confidence fell below the bundle's open-set
+   * rejection threshold. The label is still reported for display, but consumers
+   * that trigger actions must treat a rejected frame as "no gesture".
+   */
+  rejected: boolean;
+  /**
+   * Discrete phase from the segmenter. Actions should fire on `onset` only;
+   * `hold` repeats every frame for as long as the pose is maintained.
+   */
+  phase: GesturePhase;
+  /** Milliseconds the current segment has been held. */
+  heldMs: number;
+  /** Unique id of the current segment, for de-duplicating repeated holds. */
+  segmentId: number;
+  /**
+   * Milliseconds spent in MediaPipe landmark detection for this frame.
+   *
+   * Split out from `inferenceTimeMs` because the two have completely different
+   * remedies: detection cost is a function of model complexity and GPU
+   * availability, classification cost is the ONNX session. Reporting only the
+   * total makes a slow frame impossible to attribute.
+   */
+  detectMs: number;
+  /** Milliseconds spent in ONNX classification for this frame. */
+  classifyMs: number;
+  /**
+   * Every hand detected this frame, each with independent recognition state.
+   * The top-level fields above mirror `hands[0]`, the primary hand, so existing
+   * single-hand consumers keep working unchanged.
+   */
+  hands: HandResult[];
+  /**
+   * Set when two hands are detected and both produced an accepted label, in a
+   * stable left/right order. Null whenever fewer than two hands are present.
+   */
+  combo: TwoHandedCombo | null;
 }
 
-const GESTURE_LABELS = [
+/**
+ * A two-handed pose, expressed as an ordered pair of single-hand labels.
+ *
+ * The shipped models are trained on one hand, so a genuine two-hand classifier
+ * would need two-hand training data that neither HaGRID nor the ASL alphabet
+ * set provides. Composing the pair from two independent single-hand
+ * predictions is the honest alternative: it is not a two-handed *model*, but it
+ * does give a real two-handed command surface — and squares the vocabulary,
+ * since 18 labels yield 324 ordered pairs.
+ */
+export interface TwoHandedCombo {
+  left: string;
+  right: string;
+  /** `left+right`, for use as a binding key. */
+  id: string;
+  /** The weaker of the two hands' confidences — the pair is only as good as that. */
+  confidence: number;
+  /** Distance between the two wrists, normalised. Drives scale gestures. */
+  separation: number;
+}
+
+/**
+ * Fallback labels, used only when a model bundle ships no labels.json.
+ * The deployed vocabulary comes from the bundle so that Python and the browser
+ * cannot drift apart. See docs/api-reference.md "Model Bundles".
+ */
+const DEFAULT_GESTURE_LABELS = [
   "none",
   "open_palm",
   "closed_fist",
@@ -43,12 +128,102 @@ const GESTURE_LABELS = [
 ];
 
 const FEATURE_DIM = 86;
-const SEQUENCE_LENGTH = 30;
+
+/**
+ * Sentinel id for a user-taught gesture. It sits far above any real class index
+ * so it can never collide with a bundle label, however large the vocabulary
+ * grows.
+ */
+export const CUSTOM_GESTURE_ID = 999;
+
+/**
+ * How long to wait for MediaPipe to return landmarks for one frame.
+ *
+ * Generous, because detection genuinely takes hundreds of milliseconds on a
+ * machine without GPU acceleration. This exists to bound a hang, not to police
+ * latency.
+ */
+const DETECTION_TIMEOUT_MS = 2000;
+
+/**
+ * Confidence required to accept a new hand detection.
+ *
+ * Deliberately low, and measured rather than assumed: raising this to 0.5
+ * stopped MediaPipe detecting a hand at all on a test clip that 0.3 handled
+ * fine. A missed hand costs the user a repeated gesture, while a weak
+ * detection is filtered downstream by the model's own calibrated rejection
+ * threshold — so the asymmetry favours accepting.
+ */
+const MIN_DETECTION_CONFIDENCE = 0.3;
+
+/**
+ * Confidence required to keep tracking an existing hand.
+ *
+ * Kept low because falling below it makes MediaPipe re-run full palm
+ * detection, which is the expensive path — tolerating a weak track is cheaper
+ * than re-detecting every few frames.
+ */
+const MIN_TRACKING_CONFIDENCE = 0.2;
+
+/** Minimum prototype-match confidence for a taught gesture to be reported. */
+const CUSTOM_MATCH_THRESHOLD = 0.8;
+
+/** Per-finger curl ratios occupy indices 78-82 of the 86-dim feature vector. */
+const CURL_FEATURE_START = 78;
+const CURL_FEATURE_END = 82;
+const CURL_WEIGHT = 2.0;
+
+/**
+ * Weight on derived features (angles, distances, curls) over raw coordinates.
+ *
+ * Square root of two, because the previous matcher applied a factor of 2 to
+ * *squared* differences inside the distance computation. Folding the weighting
+ * into the vectors themselves means it must be applied to the values, and
+ * sqrt(2) squared is 2 — so the metric is unchanged while prototypes can now
+ * be built in the same space they are matched in.
+ */
+const DERIVED_FEATURE_WEIGHT = Math.SQRT2;
+const DEFAULT_SEQUENCE_LENGTH = 30;
+
+/** Shape of the labels.json emitted next to an exported gesture.onnx. */
+export interface ModelBundle {
+  labels: string[];
+  seq_len?: number;
+  feature_dim?: number;
+  val_accuracy?: number;
+  test_accuracy?: number;
+  calibration?: BundleCalibration | null;
+}
+
+/**
+ * Confidence calibration fitted on the model's held-out validation split by
+ * `training/evaluation/calibrate_confidence.py`.
+ *
+ * A softmax classifier is closed-set and typically overconfident, which matters
+ * here because users constantly make hand shapes outside the vocabulary. The
+ * temperature rescales logits so reported confidence matches observed accuracy;
+ * the threshold is the cut-off below which we report nothing rather than a
+ * confident wrong label.
+ */
+export interface BundleCalibration {
+  temperature: number;
+  rejection_threshold: number;
+  ece_before?: number;
+  ece_after?: number;
+}
 
 // ---------------------------------------------------------------------------
 // Feature Extraction (mirrors core/landmarks/features.py)
 // ---------------------------------------------------------------------------
 
+/**
+ * Build the 86-dim feature vector the model consumes.
+ *
+ * Input must already be normalized — see `normalizeLandmarks`. Passing raw
+ * MediaPipe output produces a vector in a different space from the training
+ * data and the model's output becomes meaningless, which is exactly the bug
+ * this signature comment exists to prevent recurring.
+ */
 function extractFeatures(landmarks: Landmark[]): Float32Array {
   const features = new Float32Array(FEATURE_DIM);
   let idx = 0;
@@ -83,8 +258,13 @@ function extractFeatures(landmarks: Landmark[]): Float32Array {
   }
 
   // 4. Finger curl ratios (5)
+  // [tip, pip, mcp] per finger, matching `_finger_curl_ratios` in
+  // core/landmarks/features.py. The thumb's middle and base indices are 2 and
+  // 3 in that order — the reverse of the anatomical reading — and having them
+  // the other way round here silently produced a different thumb curl from the
+  // one the model was trained on.
   const fingerDefs: [number, number, number][] = [
-    [4, 3, 2],   // thumb
+    [4, 2, 3],   // thumb
     [8, 6, 5],   // index
     [12, 10, 9], // middle
     [16, 14, 13],// ring
@@ -149,35 +329,301 @@ function cross3d(
 // ---------------------------------------------------------------------------
 
 export class GestureEngine {
+  /**
+   * Whether the browser can give MediaPipe a WebGL context.
+   *
+   * Checked before initialization because MediaPipe's failure mode is an
+   * alert() per frame from inside its bundled code, which cannot be caught.
+   */
+  static isWebGLAvailable(): boolean {
+    if (typeof document === "undefined") return false;
+    try {
+      const canvas = document.createElement("canvas");
+      const gl =
+        canvas.getContext("webgl2") ||
+        canvas.getContext("webgl") ||
+        canvas.getContext("experimental-webgl");
+      if (!gl) return false;
+      // Release the probe context so it does not count against the browser's limit.
+      (gl as WebGLRenderingContext)
+        .getExtension("WEBGL_lose_context")
+        ?.loseContext();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private hands: any | null = null;
   private session: ort.InferenceSession | null = null;
-  private sequenceBuffer: Float32Array[] = [];
   private isInitialized = false;
+
+  /** Recognition state per hand, keyed by handedness. */
+  private tracks = new Map<Handedness, HandTrack>();
+
+  /** Hands MediaPipe is configured to detect. */
+  private maxHands = 1;
+
+  /**
+   * MediaPipe Hands model complexity: 0 (lite) or 1 (full).
+   *
+   * Defaults to lite. Full costs roughly two to three times as much per frame
+   * for a modest gain in landmark precision, and the trade is bad here: the
+   * classifier needs a 30-frame window, so at the ~3fps full complexity
+   * produces on a machine without GPU acceleration the buffer takes ten
+   * seconds to fill and every gesture is classified from stale frames. Lite at
+   * 15fps is far more accurate in practice than full at 3fps.
+   */
+  private modelComplexity: 0 | 1 = 0;
+  private labels: string[] = [...DEFAULT_GESTURE_LABELS];
+  private sequenceLength: number = DEFAULT_SEQUENCE_LENGTH;
+
+  /**
+   * Calibration from the loaded bundle. The defaults are deliberately inert
+   * (T=1 leaves the softmax untouched) so an uncalibrated bundle behaves
+   * exactly as it did before, just with a conservative generic threshold.
+   */
+  private temperature = 1.0;
+  private rejectionThreshold = 0.6;
+
+  private segmenterConfig: Partial<SegmenterConfig> = {};
+
+  /** Tune onset/offset behaviour, e.g. for a latency-sensitive binding. */
+  configureSegmenter(config: Partial<SegmenterConfig>): void {
+    this.segmenterConfig = { ...this.segmenterConfig, ...config };
+    for (const track of this.tracks.values()) track.segmenter.configure(config);
+  }
+
+  getSegmenterConfig(): SegmenterConfig {
+    return this.track("unknown").segmenter.getConfig();
+  }
+
+  /**
+   * Detect one hand or two.
+   *
+   * Two-handed tracking roughly doubles landmark-detection cost, so it stays
+   * opt-in rather than being the default on every device.
+   */
+  async setMaxHands(count: 1 | 2): Promise<void> {
+    if (count === this.maxHands) return;
+    this.maxHands = count;
+    if (this.hands) {
+      this.hands.setOptions({
+        maxNumHands: count,
+        modelComplexity: this.modelComplexity,
+        minDetectionConfidence: MIN_DETECTION_CONFIDENCE,
+        minTrackingConfidence: MIN_TRACKING_CONFIDENCE,
+      });
+    }
+    // State for a hand that is no longer tracked would otherwise persist and
+    // resurface stale on the next switch back.
+    this.tracks.clear();
+  }
+
+  getMaxHands(): number {
+    return this.maxHands;
+  }
+
+  /**
+   * Trade landmark precision against frame rate.
+   *
+   * Applied live; MediaPipe accepts new options without a restart.
+   */
+  setModelComplexity(complexity: 0 | 1): void {
+    if (complexity === this.modelComplexity) return;
+    this.modelComplexity = complexity;
+    this.hands?.setOptions({
+      maxNumHands: this.maxHands,
+      modelComplexity: complexity,
+      minDetectionConfidence: MIN_DETECTION_CONFIDENCE,
+      minTrackingConfidence: MIN_TRACKING_CONFIDENCE,
+    });
+  }
+
+  getModelComplexity(): 0 | 1 {
+    return this.modelComplexity;
+  }
+
+  /** Track for a hand, created on first sight. */
+  private track(handedness: Handedness): HandTrack {
+    let t = this.tracks.get(handedness);
+    if (!t) {
+      t = new HandTrack(handedness, this.segmenterConfig);
+      this.tracks.set(handedness, t);
+    }
+    return t;
+  }
+
+  /** Calibration actually in force, for display in the console. */
+  getCalibration(): { temperature: number; rejectionThreshold: number } {
+    return {
+      temperature: this.temperature,
+      rejectionThreshold: this.rejectionThreshold,
+    };
+  }
+
+  /** The active gesture vocabulary (from the model bundle when available). */
+  getLabels(): string[] {
+    return [...this.labels];
+  }
+
+  /** Temporal window the loaded model expects. */
+  getSequenceLength(): number {
+    return this.sequenceLength;
+  }
+
+  /**
+   * Load labels.json sitting next to the .onnx file, so the vocabulary travels
+   * with the model instead of being hardcoded here. Falls back silently.
+   */
+  private async loadBundleLabels(modelUrl: string): Promise<void> {
+    const labelsUrl = modelUrl.replace(/[^/]+$/, "labels.json");
+    try {
+      const res = await fetch(labelsUrl);
+      if (!res.ok) return;
+      const bundle: ModelBundle = await res.json();
+      if (Array.isArray(bundle.labels) && bundle.labels.length > 0) {
+        this.labels = bundle.labels;
+        if (bundle.seq_len && bundle.seq_len > 0) {
+          this.sequenceLength = bundle.seq_len;
+        }
+        // An uncalibrated bundle keeps T=1 and the conservative default
+        // threshold rather than inheriting whatever the last bundle used.
+        const cal = bundle.calibration;
+        this.temperature = cal && cal.temperature > 0 ? cal.temperature : 1.0;
+        this.rejectionThreshold = cal ? cal.rejection_threshold : 0.6;
+
+        console.log(
+          `GestureEngine: loaded ${this.labels.length} labels from bundle`,
+          bundle.val_accuracy ? `(val acc ${bundle.val_accuracy})` : "",
+          cal
+            ? `calibrated T=${this.temperature} reject<${this.rejectionThreshold}`
+            : "(uncalibrated)"
+        );
+      }
+    } catch {
+      console.warn("GestureEngine: no labels.json found, using default labels");
+    }
+  }
 
   /**
    * Initialize MediaPipe Hands and ONNX Runtime session.
    */
   async initialize(modelUrl?: string): Promise<void> {
-    // Initialize ONNX Runtime with WebGPU if available, fallback to WASM
+    // 1. Initialize ONNX Runtime with WebGPU if available
     try {
+      // Configure ORT with detailed paths for better reliability in workers
       ort.env.wasm.wasmPaths = "/onnx/";
 
+      // Threaded WASM needs SharedArrayBuffer, which needs the page to be
+      // cross-origin isolated (COOP + COEP). Those headers are set in
+      // `next.config.mjs` for the dev server, but `output: "export"` drops
+      // them — a static host has to send them itself, and many do not. Asking
+      // for threads that cannot be created just produces a runtime warning and
+      // a silent fallback, so the request is matched to what the page can
+      // actually support.
+      const isolated =
+        typeof crossOriginIsolated !== "undefined" && crossOriginIsolated;
+      ort.env.wasm.numThreads = isolated
+        ? Math.min(4, navigator.hardwareConcurrency || 4)
+        : 1;
+      ort.env.wasm.proxy = false;
+
+      if (!isolated) {
+        console.info(
+          "GestureEngine: page is not cross-origin isolated, so ONNX runs " +
+            "single-threaded. Serve with Cross-Origin-Opener-Policy: same-origin " +
+            "and Cross-Origin-Embedder-Policy: require-corp for multithreaded WASM."
+        );
+      }
+
+      console.log("GestureEngine: Initializing ORT with wasmPaths:", ort.env.wasm.wasmPaths);
+
       if (modelUrl) {
-        this.session = await ort.InferenceSession.create(modelUrl, {
+        await this.loadBundleLabels(modelUrl);
+        // High-perf manual fetch strategy for models with external data (.data files)
+        const modelResponse = await fetch(modelUrl);
+        const modelBuffer = await modelResponse.arrayBuffer();
+
+        // Assume external data is [modelName].data if it exists
+        const dataUrl = `${modelUrl}.data`;
+        const dataResponse = await fetch(dataUrl);
+        const dataBuffer = await dataResponse.arrayBuffer();
+
+        this.session = await ort.InferenceSession.create(modelBuffer, {
           executionProviders: ["webgpu", "wasm"],
           graphOptimizationLevel: "all",
+          enableCpuMemArena: true,
+          enableMemPattern: true,
+          externalData: [
+            {
+              path: "gesture.onnx.data",
+              data: new Uint8Array(dataBuffer),
+            },
+          ],
         });
+        console.log("ONNX Session initialized with external data");
       }
     } catch (err) {
-      console.warn(
-        "ONNX model not loaded (running in detection-only mode):",
-        err
+      console.warn("ONNX WebGPU/Manual fetch failure:", err);
+      if (modelUrl) {
+        try {
+          // Fallback to simple URL loading for WASM if manual fetch fails
+          this.session = await ort.InferenceSession.create(modelUrl, {
+            executionProviders: ["wasm"],
+          });
+          console.log("ONNX Fallback session initialized");
+        } catch (wasmErr) {
+          console.error("ONNX Critical Failure: All loading strategies failed:", wasmErr);
+          throw wasmErr;
+        }
+      }
+    }
+
+    // 2. Initialize MediaPipe Hands
+    if (!Hands) {
+      console.error("MediaPipe Hands library not found");
+      return;
+    }
+
+    // MediaPipe needs WebGL and, when it cannot get a context, calls alert()
+    // from inside its own bundle on every frame we send it. That makes the page
+    // unusable behind hundreds of modal dialogs. Fail fast with something the
+    // UI can actually display instead.
+    if (!GestureEngine.isWebGLAvailable()) {
+      throw new Error(
+        "WebGL is unavailable, so hand tracking cannot run. Enable hardware " +
+        "acceleration in your browser settings (Chrome: Settings > System > " +
+        "\"Use graphics acceleration when available\"), then fully restart the " +
+        "browser. chrome://gpu shows why it is disabled."
       );
     }
 
+    this.hands = new Hands({
+      locateFile: (file: string) => `/onnx/mediapipe/${file}`,
+    });
+
+    this.hands.setOptions({
+      maxNumHands: this.maxHands,
+      modelComplexity: this.modelComplexity,
+      minDetectionConfidence: MIN_DETECTION_CONFIDENCE,
+      minTrackingConfidence: MIN_TRACKING_CONFIDENCE,
+    });
+
+    this.hands.onResults((results: any) => {
+      this.lastMPResults = results;
+      if (this.currentDetectionPromise) {
+        this.currentDetectionPromise.resolve();
+        this.currentDetectionPromise = null;
+      }
+    });
+
     this.isInitialized = true;
-    console.log("GestureEngine initialized (detection-only mode)");
+    console.log("GestureEngine: MediaPipe + ONNX initialized");
   }
+
+  private lastMPResults: any = null;
+  private currentDetectionPromise: { resolve: Function, reject: Function } | null = null;
 
   /**
    * Process a video frame and return gesture results.
@@ -186,86 +632,356 @@ export class GestureEngine {
   async processFrame(
     video: HTMLVideoElement
   ): Promise<GestureResult | null> {
-    if (!this.isInitialized) return null;
+    if (!this.isInitialized || !this.hands) return null;
 
     const t0 = performance.now();
 
-    // For now, return a placeholder — MediaPipe Hands JS integration
-    // will be added once the npm package is installed
-    // The architecture is ready for it
+    // 1. Landmark detection. MediaPipe's callback API is wrapped in a promise
+    //    so the caller can await one frame at a time.
+    //
+    //    The wait is bounded. MediaPipe occasionally drops a frame without
+    //    invoking `onResults` — most reliably when the WebGL context is lost —
+    //    and an unbounded await there hangs `processFrame` permanently, which
+    //    presents as the console freezing with the camera still on. A timeout
+    //    turns that into one skipped frame.
+    let timer: number | undefined;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        this.currentDetectionPromise = { resolve, reject };
+        timer = window.setTimeout(() => {
+          this.currentDetectionPromise = null;
+          reject(new Error("MediaPipe detection timed out"));
+        }, DETECTION_TIMEOUT_MS);
+        this.hands!.send({ image: video }).catch(reject);
+      });
+    } catch {
+      // A dropped or timed-out frame is reported as "no hand" rather than
+      // thrown: the caller is a render loop, and one bad frame must not stop it.
+      this.currentDetectionPromise = null;
+      for (const track of this.tracks.values()) track.markMissing();
+      return this.emptyResult(performance.now() - t0);
+    } finally {
+      if (timer !== undefined) window.clearTimeout(timer);
+    }
 
-    const t1 = performance.now();
+    // Detection is everything up to this point.
+    const detectMs = performance.now() - t0;
+
+    const mp = this.lastMPResults;
+    const detected: Landmark[][] = mp?.multiHandLandmarks ?? [];
+
+    if (detected.length === 0) {
+      for (const track of this.tracks.values()) track.markMissing();
+      return this.emptyResult(performance.now() - t0);
+    }
+
+    const now = performance.now();
+    const classifyStart = now;
+    const results: HandResult[] = [];
+    const seen = new Set<Handedness>();
+
+    for (let i = 0; i < detected.length; i++) {
+      const landmarks = detected[i];
+      if (!landmarks || landmarks.length < 21) continue;
+
+      // MediaPipe reports handedness from the camera's point of view, which is
+      // mirrored relative to the user. Keeping its label as-is would mean the
+      // console's "left hand" is the user's right.
+      const raw = mp.multiHandedness?.[i]?.label?.toLowerCase();
+      const handedness: Handedness =
+        raw === "left" ? "right" : raw === "right" ? "left" : "unknown";
+
+      seen.add(handedness);
+      const track = this.track(handedness);
+
+      // Normalize before extracting: the model was trained on wrist-centred,
+      // unit-scaled, rotation-aligned landmarks, and raw MediaPipe output is
+      // none of those.
+      track.push(
+        extractFeatures(normalizeLandmarks(landmarks)),
+        this.sequenceLength
+      );
+
+      let gestureId = -1;
+      let confidence = 0;
+      let rejected = true;
+
+      if (this.session && track.isReady(this.sequenceLength)) {
+        const classification = await this.classify(track);
+        if (classification) {
+          gestureId = classification.gestureId;
+          confidence = classification.confidence;
+          rejected = classification.rejected;
+        }
+      }
+
+      let gestureName =
+        gestureId >= 0 ? (this.labels[gestureId] ?? "unknown") : "unknown";
+
+      // Custom gestures fill the gap where the trained model abstains; they
+      // never outrank a confident prediction from it.
+      if (rejected) {
+        const custom = this.matchCustomGesture(landmarks);
+        if (custom && custom.confidence > confidence) {
+          gestureId = CUSTOM_GESTURE_ID;
+          gestureName = custom.name;
+          confidence = custom.confidence;
+          rejected = false;
+        }
+      }
+
+      const { velocity, spatialIntent } = track.motion(landmarks, now);
+      const segment = track.segmenter.push(
+        { gestureName, gestureId, confidence, rejected },
+        now
+      );
+
+      results.push({
+        handedness,
+        gestureName,
+        gestureId,
+        confidence,
+        rejected,
+        landmarks,
+        velocity,
+        spatialIntent,
+        phase: segment.phase,
+        heldMs: segment.heldMs,
+        segmentId: segment.segmentId,
+      });
+    }
+
+    // Hands that exist as tracks but were not detected this frame.
+    for (const [handedness, track] of this.tracks) {
+      if (!seen.has(handedness)) track.markMissing();
+    }
+
+    if (results.length === 0) {
+      return this.emptyResult(performance.now() - t0);
+    }
+
+    // The primary hand is the most confident accepted one, falling back to the
+    // first detected. Using detection order alone would let the top-level
+    // fields flicker between hands as MediaPipe reorders them.
+    const primary =
+      results.find((r) => !r.rejected) ??
+      results.reduce((a, b) => (b.confidence > a.confidence ? b : a));
 
     return {
-      gestureName: "detecting...",
+      gestureName: primary.gestureName,
+      gestureId: primary.gestureId,
+      confidence: primary.confidence,
+      landmarks: primary.landmarks,
+      handedness: primary.handedness,
+      inferenceTimeMs: performance.now() - t0,
+      velocity: primary.velocity,
+      spatialIntent: primary.spatialIntent,
+      rejected: primary.rejected,
+      phase: primary.phase,
+      heldMs: primary.heldMs,
+      segmentId: primary.segmentId,
+      hands: results,
+      combo: this.buildCombo(results),
+      detectMs,
+      classifyMs: performance.now() - classifyStart,
+    };
+  }
+
+  /**
+   * Compose a two-handed pose from two accepted single-hand predictions.
+   *
+   * Returns null unless both hands are present and both were accepted — a pair
+   * built on a rejected half is not a two-handed gesture, it is one gesture and
+   * some noise.
+   */
+  private buildCombo(results: HandResult[]): TwoHandedCombo | null {
+    if (results.length < 2) return null;
+
+    const left = results.find((r) => r.handedness === "left");
+    const right = results.find((r) => r.handedness === "right");
+    if (!left || !right || left.rejected || right.rejected) return null;
+
+    const dx = left.landmarks[0].x - right.landmarks[0].x;
+    const dy = left.landmarks[0].y - right.landmarks[0].y;
+
+    return {
+      left: left.gestureName,
+      right: right.gestureName,
+      id: `${left.gestureName}+${right.gestureName}`,
+      confidence: Math.min(left.confidence, right.confidence),
+      separation: Math.sqrt(dx * dx + dy * dy),
+    };
+  }
+
+  /** Result for a frame in which no hand was recognised. */
+  private emptyResult(elapsedMs: number): GestureResult {
+    return {
+      gestureName: "no hand",
       gestureId: -1,
       confidence: 0,
       landmarks: null,
       handedness: "unknown",
-      inferenceTimeMs: t1 - t0,
+      inferenceTimeMs: elapsedMs,
+      velocity: { x: 0, y: 0, z: 0 },
+      spatialIntent: "none",
+      rejected: true,
+      phase: "idle",
+      heldMs: 0,
+      segmentId: 0,
+      hands: [],
+      combo: null,
+      detectMs: elapsedMs,
+      classifyMs: 0,
     };
   }
 
   /**
    * Run ONNX inference on buffered features.
    */
-  private async classifyGesture(): Promise<{
+  private async classify(track: HandTrack): Promise<{
     gestureId: number;
     confidence: number;
+    rejected: boolean;
   } | null> {
-    if (!this.session || this.sequenceBuffer.length < SEQUENCE_LENGTH) {
-      return null;
+    if (!this.session) return null;
+
+    if (!track.isReady(this.sequenceLength)) {
+      // Window not yet full: nothing to classify, and no claim to make.
+      return { gestureId: -1, confidence: 0, rejected: true };
     }
 
-    // Build input tensor: (1, seq_len, feature_dim)
-    const inputData = new Float32Array(SEQUENCE_LENGTH * FEATURE_DIM);
-    const recent = this.sequenceBuffer.slice(-SEQUENCE_LENGTH);
-    for (let i = 0; i < SEQUENCE_LENGTH; i++) {
-      inputData.set(recent[i], i * FEATURE_DIM);
-    }
-
+    const inputData = track.window(this.sequenceLength, FEATURE_DIM);
     const inputTensor = new ort.Tensor("float32", inputData, [
       1,
-      SEQUENCE_LENGTH,
+      this.sequenceLength,
       FEATURE_DIM,
     ]);
 
-    const maskData = new Uint8Array(SEQUENCE_LENGTH).fill(0);
-    const maskTensor = new ort.Tensor("bool", maskData, [1, SEQUENCE_LENGTH]);
+    const maskData = new Uint8Array(this.sequenceLength).fill(0);
+    const maskTensor = new ort.Tensor("bool", maskData, [1, this.sequenceLength]);
 
     const results = await this.session.run({
       input: inputTensor,
       mask: maskTensor,
     });
 
-    const logits = results["logits"].data as Float32Array;
+    const raw = results["logits"].data as Float32Array;
 
-    // Softmax
-    const maxLogit = Math.max(...logits);
-    const expLogits = logits.map((l: number) => Math.exp(l - maxLogit));
-    const sumExp = expLogits.reduce((a: number, b: number) => a + b, 0);
-    const probs = expLogits.map((e: number) => e / sumExp);
+    // Temperature scaling, then softmax. Dividing by T never changes which
+    // class wins — only how confident the model claims to be — so this is safe
+    // to apply before the argmax and is what makes `rejectionThreshold`
+    // comparable to the accuracy measured at fit time.
+    const t = this.temperature > 0 ? this.temperature : 1.0;
+    const logits = new Float32Array(raw.length);
+    for (let i = 0; i < raw.length; i++) logits[i] = raw[i] / t;
+
+    // Subtract the max before exponentiating, or a large logit overflows to
+    // Infinity and the whole distribution becomes NaN.
+    let maxLogit = -Infinity;
+    for (let i = 0; i < logits.length; i++) {
+      if (logits[i] > maxLogit) maxLogit = logits[i];
+    }
+
+    let sumExp = 0;
+    const probs = new Float32Array(logits.length);
+    for (let i = 0; i < logits.length; i++) {
+      probs[i] = Math.exp(logits[i] - maxLogit);
+      sumExp += probs[i];
+    }
 
     let maxIdx = 0;
-    for (let i = 1; i < probs.length; i++) {
+    for (let i = 0; i < probs.length; i++) {
+      probs[i] /= sumExp;
       if (probs[i] > probs[maxIdx]) maxIdx = i;
     }
 
     return {
       gestureId: maxIdx,
       confidence: probs[maxIdx],
+      rejected: probs[maxIdx] < this.rejectionThreshold,
     };
   }
 
   /**
-   * Add features to the temporal buffer.
+   * Match against user-taught gestures using class prototypes.
+   *
+   * Each taught gesture is reduced to a mean vector plus the spread of its own
+   * samples, and a query is scored in units of that spread. That makes scores
+   * comparable across gestures with genuinely different tightness — a fist
+   * whose samples cluster hard and a wave whose samples spread wide can no
+   * longer share one absolute distance threshold, which previously
+   * over-rejected the first and over-accepted the second.
    */
-  private pushFeatures(landmarks: Landmark[]): void {
-    const features = extractFeatures(landmarks);
-    this.sequenceBuffer.push(features);
-    if (this.sequenceBuffer.length > SEQUENCE_LENGTH * 2) {
-      this.sequenceBuffer = this.sequenceBuffer.slice(-SEQUENCE_LENGTH);
+  private matchCustomGesture(
+    currentLandmarks: Landmark[]
+  ): { name: string; confidence: number } | null {
+    const prototypes = this.prototypes();
+    if (prototypes.length === 0) return null;
+
+    const query = this.weightFeatures(
+      extractFeatures(normalizeLandmarks(currentLandmarks))
+    );
+    const match = matchPrototypes(query, prototypes);
+
+    return match && match.confidence > CUSTOM_MATCH_THRESHOLD
+      ? { name: match.name, confidence: match.confidence }
+      : null;
+  }
+
+  /**
+   * Prototypes for the taught gestures, rebuilt only when the store changes.
+   *
+   * Deriving these per frame meant a user with ten taught gestures paid for
+   * ~400 feature extractions every frame to recompute values that never
+   * change. The signature covers gesture ids and sample counts, so teaching,
+   * deleting or re-recording a gesture invalidates the cache.
+   */
+  private prototypes(): Prototype[] {
+    const gestures = gestureStore.getGestures();
+    const signature = gestures.map((g) => `${g.id}:${g.samples.length}`).join("|");
+
+    if (signature === this.prototypeSignature) return this.prototypeCache;
+
+    this.prototypeCache = gestures
+      .map((g) =>
+        buildPrototype(
+          g.id,
+          g.name,
+          g.samples.map((sample) =>
+            this.weightFeatures(extractFeatures(normalizeLandmarks(sample)))
+          )
+        )
+      )
+      .filter((p): p is Prototype => p !== null);
+    this.prototypeSignature = signature;
+
+    return this.prototypeCache;
+  }
+
+  private prototypeCache: Prototype[] = [];
+  private prototypeSignature = "";
+
+  /**
+   * Emphasise the per-finger curl ratios before comparing.
+   *
+   * Curl carries most of what distinguishes one hand shape from another, while
+   * raw coordinates carry a lot of position and scale that a match should not
+   * depend on. Scaling those five dimensions up biases the distance toward
+   * shape.
+   */
+  private weightFeatures(features: Float32Array): Float32Array {
+    const out = new Float32Array(features.length);
+    // Derived features (angles, distances, curls) discriminate shape better
+    // than the raw coordinates that precede them, so they count for more. The
+    // weighting is folded in here rather than applied at comparison time, so
+    // prototypes are built in the same space they are matched in.
+    for (let i = 0; i < features.length; i++) {
+      out[i] = i >= 63 ? features[i] * DERIVED_FEATURE_WEIGHT : features[i];
     }
+    for (let i = CURL_FEATURE_START; i <= CURL_FEATURE_END; i++) {
+      out[i] *= CURL_WEIGHT;
+    }
+    return out;
   }
 
   /**
@@ -274,8 +990,39 @@ export class GestureEngine {
   dispose(): void {
     this.session?.release();
     this.session = null;
+
+    // MediaPipe Hands holds a WebGL context. Dropping the reference does not
+    // free it, and browsers cap concurrent WebGL contexts (~16 in Chrome), so
+    // leaking one per session ends in "Failed to create WebGL canvas context".
+    if (this.hands) {
+      try {
+        const closing = this.hands.close?.();
+        if (closing && typeof closing.catch === "function") {
+          closing.catch((err: unknown) =>
+            console.warn("GestureEngine: MediaPipe close failed", err)
+          );
+        }
+      } catch (err) {
+        console.warn("GestureEngine: MediaPipe close threw", err);
+      }
+    }
     this.hands = null;
-    this.sequenceBuffer = [];
+    this.lastMPResults = null;
+    // Settle any in-flight wait instead of dropping the reference: an awaiting
+    // `processFrame` would otherwise never resume, and its caller never learn
+    // the engine was torn down.
+    this.currentDetectionPromise?.reject(new Error("GestureEngine disposed"));
+    this.currentDetectionPromise = null;
+    this.tracks.clear();
     this.isInitialized = false;
   }
 }
+
+/**
+ * Test-only export of the feature builder.
+ *
+ * Exposed so `feature-parity.test.ts` can check it against fixtures produced by
+ * the Python training pipeline. Nothing in the app should call this; use the
+ * engine.
+ */
+export const extractFeaturesForTest = extractFeatures;

@@ -56,6 +56,27 @@ demo-model:  ## Run webcam demo with trained model
 serve:  ## Start FastAPI server (optional)
 	python dextera.py serve --port 8000
 
+fetch-models:  ## Download required MediaPipe task bundles
+	@mkdir -p models/mediapipe
+	@echo "Fetching MediaPipe hand_landmarker.task ..."
+	@curl -sL -o models/mediapipe/hand_landmarker.task \
+		https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task
+	@echo "Fetching MediaPipe pose_landmarker (sign-language track) ..."
+	@curl -sL -o models/mediapipe/pose_landmarker_lite.task \
+		https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task
+	@echo "Fetching MediaPipe face_landmarker (non-manual markers) ..."
+	@curl -sL -o models/mediapipe/face_landmarker.task \
+		https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
+	@ls -lh models/mediapipe/
+
+extract-asl:  ## Extract landmarks from the ASL alphabet dataset
+	python -m training.datasets.extract_landmarks \
+		--parquet-dir data/raw/asl_parquet --output data/sequences/asl_alphabet
+
+extract-hagrid:  ## Extract landmarks from HaGRID parquet shards
+	python -m training.datasets.extract_landmarks \
+		--parquet-dir data/raw/hagrid_parquet --output data/sequences/hagrid --max-per-class 4000
+
 info:  ## Show system information
 	python dextera.py info
 
