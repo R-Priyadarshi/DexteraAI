@@ -23,6 +23,8 @@ export interface HandResult {
     gestureName: string;
     gestureId: number;
     confidence: number;
+    /** Top labels for this hand, most confident first. Empty when no model ran. */
+    alternatives: { gestureName: string; gestureId: number; confidence: number }[];
     rejected: boolean;
     landmarks: Landmark[];
     velocity: { x: number; y: number; z: number };

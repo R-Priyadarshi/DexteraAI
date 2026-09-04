@@ -33,6 +33,8 @@ import { asset } from "@/lib/base-path";
 import { AirCanvas } from "@/lib/air-canvas";
 import { DollarRecognizer, ORIENTED_OPTIONS, SHAPE_OPTIONS } from "@/lib/dollar-recognizer";
 import { AIR_SETS } from "@/lib/air-letters";
+import { SpellingBuffer, type LetterSlot } from "@/lib/spelling-buffer";
+import { WordSuggester, type Suggestion } from "@/lib/word-suggester";
 import { BUILT_IN_SHAPES, BUILT_IN_SHAPE_NAMES } from "@/lib/air-shapes";
 
 /**
@@ -176,6 +178,16 @@ export default function Console() {
     const isLockedRef = useRef(isLocked);
     // Off by default: a second landmarker is real per-frame cost, and the
     // gesture path must not get slower for people who never turn this on.
+    const [spelling, setSpelling] = useState(false);
+    const [spelled, setSpelled] = useState("");
+    const [spelledSlots, setSpelledSlots] = useState<readonly LetterSlot[]>([]);
+    const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+    const [openSlot, setOpenSlot] = useState<number | null>(null);
+    const spellingRef = useRef(spelling);
+    const spellBufferRef = useRef(new SpellingBuffer());
+    const suggesterRef = useRef<WordSuggester | null>(null);
+    const lastSpelledSegmentRef = useRef(-1);
+
     const [airDraw, setAirDraw] = useState(false);
     const [airMode, setAirMode] = useState<AirMode>("shapes");
     const [airShape, setAirShape] = useState<{ name: string; score: number } | null>(null);
@@ -195,6 +207,19 @@ export default function Console() {
     useEffect(() => { isLockedRef.current = isLocked; }, [isLocked]);
     useEffect(() => { voiceIntentRef.current = voiceIntent; }, [voiceIntent]);
     useEffect(() => { faceEnabledRef.current = faceEnabled; }, [faceEnabled]);
+    useEffect(() => { spellingRef.current = spelling; }, [spelling]);
+
+    // Half a megabyte of word list, so it loads when the surface is first
+    // opened rather than on every page view.
+    useEffect(() => {
+        if (!spelling || suggesterRef.current) return;
+        let cancelled = false;
+        WordSuggester.load(asset("/data/words.txt"))
+            .then((s) => { if (!cancelled) suggesterRef.current = s; })
+            .catch((e) => console.warn("word list unavailable; suggestions off", e));
+        return () => { cancelled = true; };
+    }, [spelling]);
+
     useEffect(() => {
         airDrawRef.current = airDraw;
         // Drop a half-finished stroke when the mode is switched off, so
@@ -299,6 +324,23 @@ export default function Console() {
     const lastFpsTimeRef = useRef(0);
     const lastStateUpdateTimeRef = useRef(0);
     const loopRef = useRef<number | null>(null);
+
+    /**
+     * Pull React state from the buffer after any change to it.
+     *
+     * The buffer is a mutable ref rather than state because it is written from
+     * inside the frame loop, where a stale closure over a state value would
+     * drop letters. This is the one place the two are reconciled.
+     */
+    const refreshSpelling = useCallback(() => {
+        const buffer = spellBufferRef.current;
+        setSpelled(buffer.text);
+        setSpelledSlots([...buffer.letters]);
+        setOpenSlot(null);
+        setSuggestions(
+            suggesterRef.current ? suggesterRef.current.suggest(buffer.letters, 5) : []
+        );
+    }, []);
 
     /**
      * Paint the stroke in progress onto the same canvas as the skeleton.
@@ -542,6 +584,22 @@ export default function Console() {
                             lastStateUpdateTimeRef.current = now;
                         }
 
+                        // Fingerspelling commits one letter per hold, keyed
+                        // on the segment id: `hold` repeats every frame, so
+                        // committing on anything but a new segment would spell
+                        // the same letter sixty times a second.
+                        if (
+                            spellingRef.current &&
+                            result.phase === "onset" &&
+                            !result.rejected &&
+                            result.segmentId !== lastSpelledSegmentRef.current &&
+                            result.alternatives.length > 0
+                        ) {
+                            lastSpelledSegmentRef.current = result.segmentId;
+                            spellBufferRef.current.commit(result.alternatives);
+                            refreshSpelling();
+                        }
+
                         if (!isLockedRef.current) {
                             pluginEngine.broadcast(result);
 
@@ -622,7 +680,7 @@ export default function Console() {
         return () => {
             if (loopRef.current) cancelAnimationFrame(loopRef.current);
         };
-    }, [isRunning, drawLandmarks, drawAirTrail, pluginEngine]);
+    }, [isRunning, drawLandmarks, drawAirTrail, refreshSpelling, pluginEngine]);
 
     useEffect(() => {
         const handleSysHalt = () => {
@@ -995,6 +1053,126 @@ export default function Console() {
                                     )}
                                 </div>
                             </div>
+                        </section>
+
+                        {/* Fingerspelling */}
+                        <section className="panel px-4 py-4">
+                            <div className="mb-3 flex items-center justify-between">
+                                <span className="label">Fingerspelling</span>
+                                <label className="flex items-center gap-2 text-[11px] text-[var(--ink-3)]">
+                                    <input
+                                        type="checkbox"
+                                        checked={spelling}
+                                        onChange={(e) => setSpelling(e.target.checked)}
+                                    />
+                                    {spelling ? "On" : "Off"}
+                                </label>
+                            </div>
+
+                            {!spelling ? (
+                                <p className="text-[11px] leading-relaxed text-[var(--ink-3)]">
+                                    Spell words with the ASL alphabet. Each letter keeps the
+                                    model&apos;s top three readings, so a wrong one is a tap to fix
+                                    rather than a letter to spell again.
+                                </p>
+                            ) : bundleId !== "asl_alphabet" ? (
+                                <p className="text-[11px] leading-relaxed text-[var(--ink-3)]">
+                                    Switch the model to <strong>ASL fingerspelling</strong> above —
+                                    the general-gesture vocabulary has no letters in it.
+                                </p>
+                            ) : (
+                                <>
+                                    <p className="readout min-h-[2rem] text-xl break-all text-[var(--ink)]">
+                                        {spelled || "—"}
+                                    </p>
+
+                                    {spelledSlots.length > 0 && (
+                                        <div className="mt-3 flex flex-wrap gap-1">
+                                            {spelledSlots.map((slot, i) => (
+                                                <button
+                                                    key={i}
+                                                    onClick={() => setOpenSlot(openSlot === i ? null : i)}
+                                                    className={`label rounded px-2 py-1 text-[11px] ${
+                                                        openSlot === i
+                                                            ? "bg-[var(--ink)] text-[var(--paper)]"
+                                                            : "text-[var(--ink-2)] hover:opacity-70"
+                                                    }`}
+                                                    title={`${(slot.candidates[slot.chosen].confidence * 100).toFixed(0)}% confident`}
+                                                >
+                                                    {slot.candidates[slot.chosen].gestureName}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    {openSlot !== null && spelledSlots[openSlot] && (
+                                        <div className="mt-2 flex flex-wrap gap-1">
+                                            <span className="label text-[10px] text-[var(--ink-3)]">
+                                                Did you mean
+                                            </span>
+                                            {spelledSlots[openSlot].candidates.map((c, ci) => (
+                                                <button
+                                                    key={ci}
+                                                    onClick={() => {
+                                                        spellBufferRef.current.choose(openSlot, ci);
+                                                        refreshSpelling();
+                                                    }}
+                                                    className="label rounded border border-[var(--rule)] px-2 py-1 text-[11px] text-[var(--ink-2)] hover:opacity-70"
+                                                >
+                                                    {c.gestureName}
+                                                    <span className="ml-1 text-[9px] text-[var(--ink-3)]">
+                                                        {(c.confidence * 100).toFixed(0)}%
+                                                    </span>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    {suggestions.length > 0 && (
+                                        <div className="mt-3">
+                                            <span className="label text-[10px] text-[var(--ink-3)]">
+                                                Words
+                                            </span>
+                                            <div className="mt-1 flex flex-wrap gap-1">
+                                                {suggestions.map((s) => (
+                                                    <button
+                                                        key={s.word}
+                                                        onClick={() => {
+                                                            spellBufferRef.current.accept(s.word);
+                                                            refreshSpelling();
+                                                        }}
+                                                        className="label rounded border border-[var(--rule)] px-2 py-1 text-[11px] text-[var(--ink)] hover:opacity-70"
+                                                    >
+                                                        {s.word}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    <div className="mt-3 flex gap-1">
+                                        {([
+                                            ["Space", () => spellBufferRef.current.space()],
+                                            ["Delete", () => spellBufferRef.current.backspace()],
+                                            ["Clear", () => spellBufferRef.current.clear()],
+                                        ] as [string, () => void][]).map(([label, run]) => (
+                                            <button
+                                                key={label}
+                                                onClick={() => { run(); refreshSpelling(); }}
+                                                className="label flex-1 rounded border border-[var(--rule)] px-2 py-1 text-[10px] text-[var(--ink-2)] hover:opacity-70"
+                                            >
+                                                {label}
+                                            </button>
+                                        ))}
+                                    </div>
+
+                                    <p className="mt-3 text-[11px] leading-relaxed text-[var(--ink-3)]">
+                                        Hold a letter to type it. J and Z are missing on purpose —
+                                        they are motion signs, and a still handshape cannot express
+                                        them.
+                                    </p>
+                                </>
+                            )}
                         </section>
 
                         {/* Air drawing */}

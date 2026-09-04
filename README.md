@@ -138,6 +138,13 @@ Stated plainly, because the alternative is a promise the code does not keep:
   standard corpus, is research-licensed.
 - **Continuous sign-language translation** is out of scope. Recognizing isolated
   signs is a different and much easier problem than translating fluent signing.
+- **Spelling keeps the runners-up, because the top guess is not the whole
+  signal.** Per-letter accuracy on an unseen person is 90.7%, but the correct
+  letter is in the model's top three 99.5% of the time. Committing only the
+  winner would spell a five-letter word cleanly 61% of the time; keeping all
+  three candidates per position makes the right word *reachable* 97.5% of the
+  time, and `word-suggester.ts` searches a 60k-word list for the readings that
+  are real words. A wrong letter is a tap to fix, not a word to respell.
 - **Fingerspelling cannot do J and Z, and struggles with the U/V/W family.**
   Both limits are structural rather than fixable by more data. J and Z are
   *motion* letters in ASL — the handshape alone does not identify them, and a

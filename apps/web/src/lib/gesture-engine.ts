@@ -41,10 +41,23 @@ export type SpatialIntent =
   | "pinch_close"
   | "none";
 
+/** One candidate label with its calibrated probability. */
+export interface GestureCandidate {
+  gestureName: string;
+  gestureId: number;
+  confidence: number;
+}
+
 export interface GestureResult {
   gestureName: string;
   gestureId: number;
   confidence: number;
+  /**
+   * The model's top few labels, most confident first, `alternatives[0]` being
+   * the reported one. Empty when no model ran, or when a user-taught gesture
+   * won — a prototype match has no ranking over the trained vocabulary.
+   */
+  alternatives: GestureCandidate[];
   landmarks: Landmark[] | null;
   handedness: "left" | "right" | "unknown";
   inferenceTimeMs: number;
@@ -185,6 +198,12 @@ const CURL_WEIGHT = 2.0;
  */
 const DERIVED_FEATURE_WEIGHT = Math.SQRT2;
 const DEFAULT_SEQUENCE_LENGTH = 30;
+
+/**
+ * How many candidates to keep. Three because that is where this project's
+ * measured top-k accuracy saturates (99.5%); a fourth adds noise, not recall.
+ */
+const TOP_K = 3;
 
 /** Shape of the labels.json emitted next to an exported gesture.onnx. */
 export interface ModelBundle {
@@ -706,6 +725,7 @@ export class GestureEngine {
       let gestureId = -1;
       let confidence = 0;
       let rejected = true;
+      let ranked: { gestureId: number; confidence: number }[] = [];
 
       if (this.session && track.isReady(this.sequenceLength)) {
         const classification = await this.classify(track);
@@ -713,6 +733,7 @@ export class GestureEngine {
           gestureId = classification.gestureId;
           confidence = classification.confidence;
           rejected = classification.rejected;
+          ranked = classification.ranked ?? [];
         }
       }
 
@@ -728,6 +749,12 @@ export class GestureEngine {
           gestureName = custom.name;
           confidence = custom.confidence;
           rejected = false;
+          // Drop the model's ranking. It describes a different vocabulary from
+          // the label now being reported, so leaving it would make
+          // `alternatives[0]` disagree with `gestureName` — and any consumer
+          // offering the runners-up would offer letters for a gesture the model
+          // did not recognise at all.
+          ranked = [];
         }
       }
 
@@ -743,6 +770,11 @@ export class GestureEngine {
         gestureId,
         confidence,
         rejected,
+        alternatives: ranked.map((r) => ({
+          gestureName: this.labels[r.gestureId] ?? "unknown",
+          gestureId: r.gestureId,
+          confidence: r.confidence,
+        })),
         landmarks,
         velocity,
         spatialIntent,
@@ -772,6 +804,7 @@ export class GestureEngine {
       gestureName: primary.gestureName,
       gestureId: primary.gestureId,
       confidence: primary.confidence,
+      alternatives: primary.alternatives,
       landmarks: primary.landmarks,
       handedness: primary.handedness,
       inferenceTimeMs: performance.now() - t0,
@@ -820,6 +853,7 @@ export class GestureEngine {
       gestureName: "no hand",
       gestureId: -1,
       confidence: 0,
+      alternatives: [],
       landmarks: null,
       handedness: "unknown",
       inferenceTimeMs: elapsedMs,
@@ -842,13 +876,14 @@ export class GestureEngine {
   private async classify(track: HandTrack): Promise<{
     gestureId: number;
     confidence: number;
+    ranked?: { gestureId: number; confidence: number }[];
     rejected: boolean;
   } | null> {
     if (!this.session) return null;
 
     if (!track.isReady(this.sequenceLength)) {
       // Window not yet full: nothing to classify, and no claim to make.
-      return { gestureId: -1, confidence: 0, rejected: true };
+      return { gestureId: -1, confidence: 0, rejected: true, ranked: [] };
     }
 
     const inputData = track.window(this.sequenceLength, FEATURE_DIM);
@@ -890,16 +925,23 @@ export class GestureEngine {
       sumExp += probs[i];
     }
 
-    let maxIdx = 0;
-    for (let i = 0; i < probs.length; i++) {
-      probs[i] /= sumExp;
-      if (probs[i] > probs[maxIdx]) maxIdx = i;
-    }
+    for (let i = 0; i < probs.length; i++) probs[i] /= sumExp;
+
+    // Keep the runners-up. On this project's own measurements the
+    // fingerspelling model is right 90.7% of the time on a person it has never
+    // seen, but the correct letter is in its top three 99.5% of the time — so
+    // discarding everything but the argmax throws away almost all of the
+    // remaining signal, and a surface that can offer alternatives turns a
+    // one-in-ten error into a glance.
+    const ranked = Array.from(probs, (confidence, gestureId) => ({ gestureId, confidence }))
+      .sort((a, b) => b.confidence - a.confidence)
+      .slice(0, TOP_K);
 
     return {
-      gestureId: maxIdx,
-      confidence: probs[maxIdx],
-      rejected: probs[maxIdx] < this.rejectionThreshold,
+      gestureId: ranked[0].gestureId,
+      confidence: ranked[0].confidence,
+      rejected: ranked[0].confidence < this.rejectionThreshold,
+      ranked,
     };
   }
 
