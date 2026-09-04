@@ -56,6 +56,10 @@ models/mediapipe/
 !models/asl_alphabet/gesture.onnx
 !models/asl_alphabet/gesture.onnx.data
 
+# Written by whichever training run finished last, so its contents describe a
+# different model each time. The named reports next to it are the ones to read.
+reports/eval.json
+
 # ── MLflow ──
 mlruns/
 mlartifacts/

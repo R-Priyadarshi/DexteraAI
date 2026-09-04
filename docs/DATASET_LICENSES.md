@@ -16,7 +16,7 @@ secondary summaries. Re-check on any retrain.
 | Dataset | Used for | Source | License as stated at source | Commercial use |
 |---|---|---|---|---|
 | HaGRID (classification, 512px) | Track 1: 18 general gestures | `Jayabalambika/hagrid-classification-512p-dataset` on HuggingFace, re-hosting HaGRID | Mirror declares **no license**. Upstream (`hukenovs/hagrid`) ships a custom licence, `license/en_us.pdf` | **Permitted**, with conditions — see below |
-| ASL Alphabet v03 | Track 2a: 26 ASL fingerspelling letters | `Marxulia/asl_sign_languages_alphabets_v03` on HuggingFace | **No license declared.** Dataset card is empty | **Unresolved** — see below |
+| ASL-HG | Track 2a: 35 fingerspelling classes (A-Z, 1-9) | [Mendeley `j4y5w2c8w9`](https://data.mendeley.com/datasets/j4y5w2c8w9/1) | **CC BY 4.0**, confirmed from Mendeley's own licence field | **Yes** — attribution only, no share-alike ✅ |
 | MediaPipe `hand_landmarker.task` | Hand landmark detection, train and inference | Google, `storage.googleapis.com/mediapipe-models` | Apache 2.0 | Yes ✅ |
 | MediaPipe `face_landmarker.task` | Non-manual markers (blendshapes) | Google, same origin | Apache 2.0 | Yes ✅ |
 
@@ -76,54 +76,39 @@ data without a share-alike obligation removes it, and the fallback is bounded �
 `extract_landmarks.py --image-dir` takes any folder-per-class image set, so no
 model or app code changes.
 
-### ASL Alphabet: the higher risk, and the one with no fallback
+### ASL Alphabet: resolved, and the model is better for it
 
-`Marxulia/asl_sign_languages_alphabets_v03` declares **no licence at all** and
-its dataset card is empty. Absent a licence, copyright default is that no rights
-are granted — permissive intent cannot be inferred from public availability, and
-a re-uploader cannot grant rights they never held. Unlike HaGRID there is no
-upstream document to fall back on and no identified rights holder to ask.
+This was the project's one unlicensable bundle. `Marxulia/asl_sign_languages_alphabets_v03`
+declared no licence and carried an empty dataset card, so no rights passed to
+this project and there was nothing to sublicense. It has been **replaced, not
+relicensed**, by ASL-HG — CC BY 4.0, attribution only, no share-alike — so
+`models/asl_alphabet` now ships MIT alongside the code.
 
-This makes `models/asl_alphabet` the **weaker** of the two positions, despite
-HaGRID being the one that carries visible conditions. A licence with obligations
-is a stronger footing than no licence at all. Open sourcing does not help here
-and mildly hurts: public worldwide distribution of weights derived from data
-nobody granted rights to is more exposure, not less.
+Replacing it improved the model rather than merely legalising it:
 
-`models/LICENSE` therefore offers no licence for this bundle, because none can
-honestly be offered.
+| | old (unlicensed) | ASL-HG |
+|---|---|---|
+| Classes | 26 letters | 35 (A-Z and 1-9) |
+| Landmark samples | 8,638 | 27,984 |
+| MediaPipe detection rate | 79% | **99.9%** |
+| Subject IDs | none | 10 participants, named in every filename |
 
-#### Identified replacements, both CC BY 4.0
+The last row mattered most. Every accuracy figure this project had published
+came from a random split, which cannot say how a model does on a new person:
+the same hands land on both sides of it. ASL-HG names the participant in each
+filename, so the split is now subject-disjoint — trained on P1-P8, tested on
+P9-P10, who appear in no training image.
 
-CC BY 4.0 permits commercial use and requires attribution only — no share-alike —
-so retraining on either makes this bundle MIT-clean and removes the whole
-problem. Checked 2026-09-04.
+That produced the first honest generalisation number here, and it sits 9 points
+below what a random split claims. Both are recorded in the bundle manifest and
+the model card.
 
-| Candidate | Contents | Why it fits | Note |
-|---|---|---|---|
-| **ASL-HG** ([Mendeley `j4y5w2c8w9`](https://data.mendeley.com/datasets/j4y5w2c8w9/1)) | 36,000 high-resolution JPGs, 36 classes (A–Z **and 0–9**), folder-per-class | Structure `extract_landmarks.py --image-dir` already reads. Adds digits, widening the vocabulary rather than just replacing it. Provenance is documented: 10 volunteers, Dhaka, May–June 2025 | 10 subjects is a narrow pool; expect weaker generalisation across hands than the sample count suggests. The current dataset's subject diversity is simply unknown, so this is a known limit replacing an unknown one |
-| **ASL Alphabet** ([Mendeley `jdyksv2jhh`](https://data.mendeley.com/datasets/jdyksv2jhh/1)) | Train/Test folders, one per letter | Same folder-per-class shape; backed by a peer-reviewed paper (Cabana, IntelliSys 2025, DOI 10.1007/978-3-032-00071-2_15) | Image count and resolution not stated on the landing page; confirm before committing to it |
+The two-handed `0` class is excluded: ASL-HG uses the two-handed sign for zero
+to keep it distinct from the letter O, and this pipeline encodes one hand in 86
+dimensions, so that class could never fire correctly.
 
-ASL-HG is the chosen replacement, and the path is wired up:
-
-```bash
-# Download ASL_Raw_Images.zip by hand - Mendeley does not serve files to its API
-# https://data.mendeley.com/datasets/j4y5w2c8w9/1
-unzip ASL_Raw_Images.zip -d data/raw/asl_hg
-make retrain-asl-clean
-```
-
-Class `0` is excluded by that target. ASL-HG deliberately uses the **two-handed**
-ASL sign for zero to keep it distinct from the letter `O`, which is good corpus
-design and incompatible with this pipeline: the feature vector encodes one hand
-in 86 dimensions, so a two-handed sign arrives as whichever hand MediaPipe
-happened to find. Training on it would not error — it would produce a class that
-can never fire correctly while drawing probability away from `O`. The result is
-35 classes: A–Z plus 1–9.
-
-Sign Language MNIST is **not** a candidate despite being CC0: 28x28 grayscale is
-far below what MediaPipe needs to find 21 hand landmarks, and it omits J and Z.
-A permissive licence on data this pipeline cannot read is no use.
+Reproduce with `make retrain-asl-clean`, after downloading the archive by hand —
+Mendeley does not serve files to its API.
 
 ## Attribution
 

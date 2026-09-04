@@ -77,24 +77,37 @@ extract-hagrid:  ## Extract landmarks from HaGRID parquet shards
 	python -m training.datasets.extract_landmarks \
 		--parquet-dir data/raw/hagrid_parquet --output data/sequences/hagrid --max-per-class 4000
 
-# Replaces models/asl_alphabet, whose current training data carries no licence.
-# ASL-HG is CC BY 4.0: commercial use allowed, attribution only, no share-alike.
+# Rebuilds models/asl_alphabet from ASL-HG (Mendeley j4y5w2c8w9, CC BY 4.0).
 # Download ASL_Raw_Images.zip by hand first - Mendeley does not serve files to
-# the API - and unzip it so that data/raw/asl_hg/ holds one folder per class:
+# its API - and unzip so that data/raw/asl_hg/ holds one folder per class:
 #     https://data.mendeley.com/datasets/j4y5w2c8w9/1
-# Class "0" is excluded because ASL-HG uses the two-handed sign for it and this
-# pipeline encodes a single hand; see docs/DATASET_LICENSES.md.
-retrain-asl-clean:  ## Rebuild the fingerspelling model on CC BY 4.0 data (ASL-HG)
+#
+# The split is by participant, not at random. ASL-HG names the volunteer in
+# every filename (P1..P10), so holding two of them out entirely is what makes
+# the reported accuracy mean "on someone it has never seen". A random split over
+# this data scores 100%, which only measures how many near-duplicate frames of
+# the same hand landed on both sides of it.
+#
+# Class "0" is excluded: ASL-HG uses the two-handed sign for zero, and this
+# pipeline encodes a single hand. See docs/DATASET_LICENSES.md.
+retrain-asl-clean:  ## Rebuild fingerspelling from CC BY 4.0 data, subject-disjoint
 	@test -d data/raw/asl_hg || { \
 		echo "error: data/raw/asl_hg not found."; \
 		echo "Download ASL_Raw_Images.zip from https://data.mendeley.com/datasets/j4y5w2c8w9/1"; \
 		echo "and unzip it to data/raw/asl_hg/ (one folder per class)."; exit 1; }
 	python -m training.datasets.extract_landmarks \
-		--image-dir data/raw/asl_hg --output data/sequences/asl_hg --exclude-classes 0
-	python dextera.py train --dataset data/sequences/asl_hg \
+		--image-dir data/raw/asl_hg --output data/sequences/asl_hg_train \
+		--exclude-classes 0 --include-regex '^P[1-8]_'
+	python -m training.datasets.extract_landmarks \
+		--image-dir data/raw/asl_hg --output data/sequences/asl_hg_heldout \
+		--exclude-classes 0 --include-regex '^P(9|10)_'
+	python dextera.py train --dataset data/sequences/asl_hg_train \
 		--epochs 80 --calibrate --export models/asl_alphabet
+	python dextera.py eval --checkpoint models/asl_alphabet/gesture.onnx --onnx \
+		--dataset data/sequences/asl_hg_heldout --output reports/eval_asl_alphabet.json
 	cd apps/web && npm run sync-runtime
-	@echo "Done. Update docs/DATASET_LICENSES.md and models/LICENSE to match."
+	@echo "Done. reports/eval_asl_alphabet.json holds the unseen-person accuracy."
+	@echo "Update test_accuracy in models/asl_alphabet/labels.json to match it."
 
 info:  ## Show system information
 	python dextera.py info

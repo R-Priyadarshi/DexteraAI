@@ -39,19 +39,29 @@ The dataset is provided by its licensors without warranties (Section 5 of that
 license), and the same disclaimer carries to these weights.
 
 
-models/asl_alphabet/  —  rights unresolved, do not rely on
----------------------------------------------------------
+models/asl_alphabet/  —  MIT, with attribution
+--------------------------------------------
 
-No license is offered for these weights, because none can honestly be offered.
+Licensed under the MIT License, the same as the code (see /LICENSE).
 
-They are trained on `Marxulia/asl_sign_languages_alphabets_v03` (HuggingFace),
-which declares no license and carries an empty dataset card. Where no license is
-granted, the copyright default is that no rights pass — and a re-uploader cannot
-grant rights they did not hold. This project therefore has nothing to sublicense
-to you.
+These weights are trained on hand landmarks extracted from **ASL-HG**, which is
+CC BY 4.0: commercial use permitted, attribution required, and — unlike the
+HaGRID licence covering the other bundle — no share-alike obligation. So there
+is nothing here that has to stay open, and MIT is available.
 
-These weights are present so the fingerspelling path is demonstrable, and they
-are scheduled for replacement rather than relicensing. Do not redistribute them
-or build a product on them. Two CC BY 4.0 replacements are identified in
-docs/DATASET_LICENSES.md; retraining on either makes this bundle MIT-clean and
-this section goes away.
+    Trained on hand landmarks extracted from the ASL-HG dataset by Md. Famidul
+    Islam Pranto, Md. Rifatul Islam, Md. Ali Akbor, Nabonita Ghosh, Md. Rahatun
+    Alam, Sudipto Chaki and Md Masudul Islam (Bangladesh University of Business
+    and Technology).
+      Dataset: https://data.mendeley.com/datasets/j4y5w2c8w9/1
+      Licence: https://creativecommons.org/licenses/by/4.0
+      DOI:     10.17632/j4y5w2c8w9.1
+
+    Changes made: images are not redistributed. A subset was read once to
+    extract MediaPipe hand landmark coordinates, which were normalised into an
+    86-dimensional feature vector and used as training input. The two-handed
+    "0" class was excluded, this pipeline encoding a single hand.
+
+This replaces an earlier bundle trained on a HuggingFace re-upload that
+declared no licence at all, and which therefore could not be licensed onward.
+That bundle is gone rather than relicensed.

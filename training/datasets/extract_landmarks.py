@@ -31,6 +31,7 @@ import contextlib
 import json
 import multiprocessing as mp_proc
 import os
+import re
 import sys
 import time
 from collections import Counter
@@ -168,6 +169,7 @@ def iter_image_dir(
     image_dir: Path,
     max_per_class: int | None,
     exclude: frozenset[str] = frozenset(),
+    include_pattern: str | None = None,
 ) -> tuple[list[str], Any]:
     """Iterate a folder-per-class image directory.
 
@@ -175,6 +177,12 @@ def iter_image_dir(
     this pipeline cannot represent - a two-handed sign, say, against an 86-dim
     single-hand feature vector - and training on one produces a class that can
     never fire correctly rather than an error.
+
+    `include_pattern` keeps only files whose name matches the regex. Its purpose
+    is subject-disjoint splitting: where a corpus encodes who recorded each
+    image in the filename, holding whole people out of training is the only way
+    to learn how the model does on a person it has never seen. A random split
+    cannot answer that, because the same hands land on both sides of it.
     """
     import cv2
 
@@ -196,9 +204,17 @@ def iter_image_dir(
     label_names = [d.name for d in class_dirs]
     logger.info(f"Found {len(label_names)} classes in {image_dir}")
 
+    keep = re.compile(include_pattern) if include_pattern else None
+    if keep:
+        logger.info(f"Keeping only files matching /{include_pattern}/")
+
     def generator() -> Any:
         for label_idx, class_dir in enumerate(class_dirs):
-            files = sorted(f for f in class_dir.iterdir() if f.suffix.lower() in IMAGE_SUFFIXES)
+            files = sorted(
+                f
+                for f in class_dir.iterdir()
+                if f.suffix.lower() in IMAGE_SUFFIXES and (keep is None or keep.search(f.name))
+            )
             if max_per_class is not None:
                 files = files[:max_per_class]
             for f in files:
@@ -399,6 +415,16 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--include-regex",
+        type=str,
+        default=None,
+        help=(
+            "Keep only files whose name matches this regex (--image-dir only). "
+            "Use it to hold whole subjects out, where the corpus names them: "
+            r"'^P([1-8])_' keeps participants 1-8."
+        ),
+    )
+    parser.add_argument(
         "--workers",
         type=int,
         default=max(1, (os.cpu_count() or 4) - 2),
@@ -430,10 +456,14 @@ def main() -> None:
         source_name = f"parquet:{args.parquet_dir}"
     else:
         excluded = frozenset(c.strip() for c in args.exclude_classes.split(",") if c.strip())
-        label_names, stream = iter_image_dir(Path(args.image_dir), args.max_per_class, excluded)
+        label_names, stream = iter_image_dir(
+            Path(args.image_dir), args.max_per_class, excluded, args.include_regex
+        )
         source_name = f"dir:{args.image_dir}"
         if excluded:
             source_name += f" (excluding {','.join(sorted(excluded))})"
+        if args.include_regex:
+            source_name += f" (files matching /{args.include_regex}/)"
 
     logger.info(f"Classes ({len(label_names)}): {label_names}")
     extract(stream, label_names, output_dir, args.workers, source_name)

@@ -37,7 +37,7 @@ browser can never drift apart.
 | Track | Classes | Data | Status |
 |---|---|---|---|
 | **General gestures** | 18 (call, dislike, fist, four, like, mute, ok, one, palm, peace, peace_inverted, rock, stop, stop_inverted, three, three2, two_up, two_up_inverted) | HaGRID, 65,802 landmark samples | **98.1% test accuracy** |
-| **ASL fingerspelling** | 26 (A–Z) | ASL alphabet, 8,638 landmark samples | **93.8% test accuracy** |
+| **ASL fingerspelling** | 35 (A–Z, 1–9) | ASL-HG, 27,984 landmark samples | **90.7% on people it has never seen** |
 | **Custom, per-user** | Unlimited | Recorded in-browser by the user | Working |
 
 ### On "recognizing every gesture"
@@ -138,6 +138,15 @@ Stated plainly, because the alternative is a promise the code does not keep:
   standard corpus, is research-licensed.
 - **Continuous sign-language translation** is out of scope. Recognizing isolated
   signs is a different and much easier problem than translating fluent signing.
+- **Fingerspelling cannot do J and Z, and struggles with the U/V/W family.**
+  Both limits are structural rather than fixable by more data. J and Z are
+  *motion* letters in ASL — the handshape alone does not identify them, and a
+  model classifying a still frame has nothing to work with. Separately, U, V, W
+  and 2 are one handshape family distinguished only by how far two or three
+  fingers are apart, which is exactly what degrades when a new person holds
+  their hand at a different distance or angle: on unseen people W recall drops
+  to 0.41 and V's precision to 0.55, while 22 of the 35 classes stay perfect.
+  The confusions are semantic, not noise.
 - **Air drawing and air writing are geometric, not learned.** Pinch to draw;
   the stroke is matched by the $1 Unistroke Recognizer — no model, no training
   data, and a new symbol can be taught from one example. Three modes: shapes
@@ -267,18 +276,36 @@ path is unavailable there by construction.
 
 ### Accuracy
 
-Held-out test splits, never trained or validated on. Splits are random rather
-than subject-disjoint (the datasets carry no subject IDs), so accuracy on new
-people will be lower.
+The two bundles were evaluated under different protocols, and the difference
+matters more than either number.
 
-| Model | Classes | Test accuracy | Macro F1 | Top-3 |
-|---|---|---|---|---|
-| General gestures | 18 | 98.1% | 98.0% | 99.4% |
-| ASL fingerspelling | 26 | 93.8% | 93.6% | 97.6% |
+| Model | Classes | Accuracy | Macro F1 | Top-3 | Protocol |
+|---|---|---|---|---|---|
+| General gestures | 18 | 98.1% | 98.0% | 99.4% | random split |
+| ASL fingerspelling | 35 | **90.7%** | 90.4% | 99.5% | **subject-disjoint** |
+
+**Only the second number describes a stranger using the app.** ASL-HG names the
+participant in every filename, so the fingerspelling model was trained on eight
+people and tested on the two it had never seen. On a random split over the same
+data it scores **100.0%** — and that figure is worthless: with 800 near-duplicate
+frames per class per person, a random split puts almost-identical images of the
+same hand on both sides of it.
+
+So the honest cost of meeting a new hand is about **nine points**, measured. The
+general-gesture model has no such number, because HaGRID carries no subject IDs
+and a subject-disjoint split cannot be constructed from it; its 98.1% is a
+random-split figure and should be read as an upper bound, not an estimate.
+
+Top-3 on unseen people is 99.5%, so when the model is wrong the right answer is
+almost always its second or third guess — useful for any surface that can offer
+alternatives rather than commit.
 
 Confidence is calibrated by temperature scaling on the validation split. For the
 general-gesture model this cut expected calibration error from 0.089 to 0.017,
-and the fitted rejection threshold holds 97.9% accuracy at full coverage.
+and the fitted rejection threshold holds 97.9% accuracy at full coverage. For
+fingerspelling it cut ECE from 0.082 to 0.008 — but that fit was made on the
+same-subject validation split, so the threshold is tuned on an easier
+distribution than a new user presents and is likely too permissive in practice.
 
 The classifier is effectively free; hand detection is the entire latency budget.
 On CPU this lands well above a 60 FPS budget. The browser path uses MediaPipe's

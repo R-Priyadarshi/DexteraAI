@@ -1,5 +1,14 @@
 {
   "labels": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
     "A",
     "B",
     "C",
@@ -29,15 +38,18 @@
   ],
   "seq_len": 30,
   "feature_dim": 86,
-  "val_accuracy": 0.9444,
-  "test_accuracy": 0.9382,
+  "val_accuracy": 1.0,
+  "test_accuracy": 0.9071,
   "calibration": {
-    "temperature": 0.8454,
-    "rejection_threshold": 0.5,
-    "ece_before": 0.0628,
-    "ece_after": 0.026,
-    "accuracy": 0.9444,
-    "coverage_at_threshold": 0.9876,
-    "accuracy_at_threshold": 0.9523
-  }
+    "temperature": 0.7097,
+    "rejection_threshold": 0.3,
+    "ece_before": 0.0815,
+    "ece_after": 0.0078,
+    "accuracy": 1.0,
+    "coverage_at_threshold": 1.0,
+    "accuracy_at_threshold": 1.0,
+    "fitted_on": "the same-subject validation split, so the rejection threshold is tuned on an easier distribution than a new user presents"
+  },
+  "same_subject_accuracy": 1.0,
+  "test_protocol": "subject-disjoint: trained on participants P1-P8, tested on P9-P10, who appear in no training image. test_accuracy is that number. same_subject_accuracy is a random split over the training participants and is reported only to show how much such a split flatters the model."
 }

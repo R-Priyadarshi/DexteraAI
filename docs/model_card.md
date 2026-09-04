@@ -53,15 +53,23 @@ Two separately-trained bundles, each shipping its own `labels.json`:
 | Bundle | Classes | Landmark samples | Source | Commercial standing |
 |---|---|---|---|---|
 | `models/hagrid` | 18 general gestures | 65,802 | HaGRID (512px classification subset) | Permitted, with attribution and share-alike conditions |
-| `models/asl_alphabet` | 26 ASL letters | 8,638 | ASL alphabet dataset | **Unresolved — source declares no licence** |
+| `models/asl_alphabet` | 35 ASL letters and digits | 27,984 | ASL-HG (CC BY 4.0) | MIT, attribution required |
 
 The two bundles do not stand in the same place legally, and the weaker one is
 not the one with visible conditions. Read
 [DATASET_LICENSES.md](DATASET_LICENSES.md) before shipping either commercially.
 
 Sample counts are post-detection: images where MediaPipe found no hand are dropped
-(HaGRID ~70-94% detection depending on shard, ASL ~79%). Only landmarks are stored;
-source images are never persisted.
+(HaGRID ~70-94% detection depending on shard, ASL-HG 99.9%). Only landmarks are
+stored; source images are never persisted.
+
+**The two rows are not comparable.** `asl_alphabet` is evaluated
+subject-disjoint — trained on participants P1-P8, tested on P9-P10, who appear
+in no training image — so 0.9071 is its accuracy on a person it has never seen.
+`hagrid` is a random split, because HaGRID carries no subject IDs, so its 0.9814
+is an upper bound rather than a generalisation estimate. On a random split over
+its own data, `asl_alphabet` scores 1.0000; the nine-point drop is what the
+honest protocol costs, and is the more useful of the two numbers.
 
 Augmentation during training: rotation, scale, translation, and Gaussian noise in
 landmark space, applied per frame so a held gesture varies slightly across the
@@ -77,7 +85,7 @@ people will be lower than the reported numbers.
 | Bundle | Classes | Test accuracy | Macro F1 | Top-3 | Test samples |
 |---|---|---|---|---|---|
 | `models/hagrid` | 18 | 0.9814 | 0.9804 | 0.9938 | 9,870 |
-| `models/asl_alphabet` | 26 | 0.9382 | 0.9355 | 0.9762 | 1,295 |
+| `models/asl_alphabet` | 35 | **0.9071** | 0.9036 | 0.9951 | 7,000 |
 
 Confidence calibration (general-gesture bundle): temperature 0.736, expected
 calibration error 0.089 to 0.017, rejection threshold 0.30 holding 97.9%

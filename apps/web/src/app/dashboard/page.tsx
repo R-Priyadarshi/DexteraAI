@@ -68,7 +68,7 @@ function buildAirRecognizer(mode: AirMode): DollarRecognizer {
 
 const MODEL_BUNDLES = [
     { id: "hagrid", name: "General gestures", url: asset("/onnx/hagrid/gesture.onnx"), classes: 18 },
-    { id: "asl_alphabet", name: "ASL fingerspelling", url: asset("/onnx/asl_alphabet/gesture.onnx"), classes: 26 },
+    { id: "asl_alphabet", name: "ASL fingerspelling", url: asset("/onnx/asl_alphabet/gesture.onnx"), classes: 35 },
 ] as const;
 
 type BundleId = (typeof MODEL_BUNDLES)[number]["id"];
